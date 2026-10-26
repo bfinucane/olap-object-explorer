@@ -1,0 +1,7 @@
+# Normalise line endings in the repository; Windows batch files must keep CRLF.
+* text=auto
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+*.webp binary

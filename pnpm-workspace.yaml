@@ -1,0 +1,14 @@
+# pnpm settings for this project (pnpm 11 reads these HERE, not from .npmrc).
+#
+# nodeLinker=hoisted is required on this machine: pnpm's default isolated linker
+# creates Windows DIRECTORY JUNCTIONS for packages, and Node's resolver does not
+# traverse junctions when walking up for transitive dependencies (*fdir*,
+# *rollup* and friends live under .pnpm/<pkg>/node_modules and are never found).
+# A hoisted, flat node_modules uses real directories and resolves normally.
+# tableau-clone/ documents the same workaround in its .npmrc.
+nodeLinker: hoisted
+
+# pnpm 11 refuses to run dependency build scripts unless they are allowed.
+# esbuild's postinstall places its platform binary; without it the build fails.
+allowBuilds:
+  esbuild: true

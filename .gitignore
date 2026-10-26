@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.verify/
+*.local
+.DS_Store
+
+# Local artifacts from the manual login recipe in the README
+tmp-db.bin
+security.local.json
