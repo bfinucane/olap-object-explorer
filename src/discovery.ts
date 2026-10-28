@@ -173,4 +173,29 @@ export const discovery = {
       };
     });
   },
+
+  /**
+   * Full member list of a dimension column, in engine display order, via the
+   * **pure-domain** query form (`domainFor` with empty `groupBy`/`measures`,
+   * PROTOCOL §5.6). It is the contract-sanctioned way to get picker values: the
+   * rows form can duplicate or omit them (§11.8), and the full list is not
+   * limited to the rows a sample happens to show.
+   *
+   * Callers MUST gate this on `capabilities.supportsInlineDomain`: when that is
+   * false the client must not send `domainFor` at all, because an empty `domain`
+   * would be indistinguishable from "this field has no values" (§5.6).
+   * A `field` that does not resolve is `400 invalid_argument`; send it exactly as
+   * `describe` spells it (case-sensitive, §11.9).
+   */
+  domain(dataset: string, field: string): Promise<string[]> {
+    return memo(`domain:${dataset}:${field}`, async () => {
+      const response = await engineApi.query({
+        dataset,
+        groupBy: [],
+        measures: [],
+        domainFor: [field],
+      });
+      return response.domain[field] ?? [];
+    });
+  },
 };

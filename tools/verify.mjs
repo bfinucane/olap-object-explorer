@@ -4,28 +4,33 @@
  *
  *   node tools/verify.mjs
  *
- * Four phases, all against the REAL engine at 127.0.0.1:8080 (start it first in
- * your own terminal with start-engine.cmd):
+ * Five phases against the REAL Patricia engine (contract v1 / protocolVersion 1):
  *
  *   1. typecheck + production build
  *   2. pure unit tests for the hierarchy folder (memberTree.ts), including empty input
- *   3. live data checks: the app's own discovery layer, bundled with esbuild and run
- *      from Node against the engine (Node calls the engine directly; no CORS involved)
+ *   3. live data checks: the app's own data layer, bundled with esbuild and run from
+ *      Node against the engine (Node calls it directly; no CORS involved)
  *   4. a real headless-Chrome walkthrough of the built UI driven over the Chrome
- *      DevTools Protocol: expand, select, preview, nest members, SQL console,
- *      error state. Screenshots land in docs/screenshots/.
+ *      DevTools Protocol: expand, select, preview, domain values, nest members,
+ *      SQL console, offline state, and the contract-version guard
+ *   5. authentication against a real engine with auth enabled (login, bearer,
+ *      401 recovery, session expiry)
  *
- * Everything it spawns (the Vite preview server, headless Chrome) is a child of
- * this one process and is killed before it exits. It does not leave a server
- * running: that rule exists so long-lived shared servers are started by the user,
- * and this script is a self-contained test run, not a server.
+ * Engine selection: if an engine answers at OLAP_ENGINE_URL (default
+ * http://127.0.0.1:8080) it is used for phases 3–4. Otherwise the harness spawns
+ * its own anonymous engine from OLAP_ENGINE_BIN against a throwaway copy of
+ * OLAP_ENGINE_DB; when neither is available phases 3–5 are reported as skipped.
+ * The auth phase (5) always spawns its own auth-enabled engine on a private port.
  *
- * Exit code 0 = every check passed.
+ * Everything it spawns (engine children, the Vite preview server, headless
+ * Chrome) is a child of this one process and is killed before it exits, so a run
+ * leaves nothing running. Exit code 0 = every check passed.
  */
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -34,11 +39,13 @@ const VERIFY_DIR = path.join(ROOT, '.verify');
 const SHOTS_DIR = path.join(ROOT, 'docs', 'screenshots');
 const PREVIEW_PORT = Number(process.env.VERIFY_PORT ?? 5199);
 const CDP_PORT = Number(process.env.VERIFY_CDP_PORT ?? 9333);
+const ANON_PORT = Number(process.env.VERIFY_ANON_PORT ?? 8096);
 const AUTH_PORT = Number(process.env.VERIFY_AUTH_PORT ?? 8097);
+const VERSION_STUB_PORT = Number(process.env.VERIFY_STUB_PORT ?? 8098);
 const ENGINE = (process.env.OLAP_ENGINE_URL ?? 'http://127.0.0.1:8080').replace(/\/+$/, '');
 const AUTH_USER = 'verifier';
 const AUTH_PASSWORD = 'verify-pass';
-/** The seeded reference database; never written, only copied for the auth engine.
+/** The seeded reference database; never written, only copied for spawned engines.
  *  Override with OLAP_ENGINE_DB when the engine tree lives somewhere else. */
 const REFERENCE_DB =
   process.env.OLAP_ENGINE_DB ?? path.join(ROOT, '..', 'Patricia', 'olap_engine', 'database.bin');
@@ -508,6 +515,33 @@ async function phaseUnit() {
     assert.ok(paths.includes('All > Furniture > Bookcases'), `missing path: ${paths.join(', ')}`);
     return 'All > Furniture > Bookcases';
   });
+
+  check('case-insensitive identity: mixed casing in members and edges folds into one tree', () => {
+    // A saved database can return #Members lowercased while #Edges keeps the
+    // registered casing; exact matching would tear the hierarchy into orphans.
+    const forest = buildMemberForest(
+      ['All', 'furniture', 'bookcases', 'chairs'],
+      [
+        { member: 'bookcases', parent: 'Furniture', weight: 1 },
+        { member: 'chairs', parent: 'furniture', weight: 0.5 },
+        { member: 'furniture', parent: 'all', weight: 1 },
+      ],
+    );
+    assert.equal(forest.length, 1, `expected one root, saw ${forest.length}`);
+    assert.equal(forest[0].name, 'All', '#Members casing must win for display');
+    assert.deepEqual(
+      forest[0].children.map((node) => node.name),
+      ['furniture'],
+    );
+    assert.deepEqual(
+      forest[0].children[0].children.map((node) => [node.name, node.weight]),
+      [
+        ['bookcases', 1],
+        ['chairs', 0.5],
+      ],
+    );
+    return 'one tree, display casing from #Members';
+  });
 }
 
 // ------------------------------------------------------------------ phase 3
@@ -520,14 +554,29 @@ async function phaseDataChecks(engineUp) {
   }
 
   const data = await bundle('src/data.ts', 'data.mjs');
-  const { engineApi, discovery, EngineError, buildMemberForest } = data;
+  const {
+    engineApi,
+    discovery,
+    EngineError,
+    buildMemberForest,
+    SUPPORTED_PROTOCOL_VERSION,
+    isSupportedProtocolVersion,
+  } = data;
   const collectNames = (nodes) => nodes.flatMap((node) => [node.name, ...collectNames(node.children)]);
 
-  await checkAsync('capabilities: protocolVersion is 1 and maxRows is reported', async () => {
+  await checkAsync('contract: the client pins protocolVersion 1 (contract v1)', () => {
+    assert.equal(SUPPORTED_PROTOCOL_VERSION, 1);
+    assert.equal(isSupportedProtocolVersion(1), true);
+    assert.equal(isSupportedProtocolVersion(2), false);
+    return 'pinned v1, refuses v2';
+  });
+
+  await checkAsync('capabilities: engine reports protocolVersion 1 and the feature flags', async () => {
     const capabilities = await engineApi.capabilities();
-    assert.equal(capabilities.protocolVersion, 1);
+    assert.equal(capabilities.protocolVersion, SUPPORTED_PROTOCOL_VERSION);
     assert.ok(capabilities.maxRows > 0);
-    return `maxRows ${capabilities.maxRows}`;
+    assert.ok(Array.isArray(capabilities.aggregations) && capabilities.aggregations.length > 0);
+    return `protocol v${capabilities.protocolVersion}, maxRows ${capabilities.maxRows}`;
   });
 
   await checkAsync('datasets: user cubes and the core system cubes are listed', async () => {
@@ -597,35 +646,40 @@ async function phaseDataChecks(engineUp) {
 
   await checkAsync('members: Product_Class folds into All > Furniture > Bookcases with weights', async () => {
     const tree = await discovery.memberTree('Product_Class');
+    const lower = (name) => name.toLowerCase();
     assert.equal(tree.memberCount, 20);
     assert.equal(tree.edgeCount, 19);
-    assert.equal(tree.forest.length, 1, 'expected exactly one root');
-    assert.equal(tree.forest[0].name, 'All');
+    assert.equal(tree.forest.length, 1, `expected exactly one root, saw ${tree.forest.length}`);
+    assert.equal(lower(tree.forest[0].name), 'all');
     const root = tree.forest[0];
     assert.deepEqual(
-      root.children.map((node) => node.name),
-      ['Furniture', 'Office Supplies', 'Technology'],
+      root.children.map((node) => lower(node.name)),
+      ['furniture', 'office supplies', 'technology'],
     );
     const furniture = root.children[0];
     assert.equal(furniture.weight, 1);
-    const bookcases = furniture.children.find((node) => node.name === 'Bookcases');
+    const bookcases = furniture.children.find((node) => lower(node.name) === 'bookcases');
     assert.ok(bookcases, 'Bookcases missing under Furniture');
     assert.equal(bookcases.weight, 1);
     assert.equal(bookcases.children.length, 0);
-    assert.equal(collectNames(tree.forest).length, 20);
+    const names = collectNames(tree.forest).map(lower);
+    assert.equal(names.length, 20);
+    assert.ok(names.includes('all') && names.includes('bookcases'));
     return 'All > Furniture > Bookcases, 20 members / 19 edges';
   });
 
   await checkAsync('members: flat hierarchies (Product, Region) render as sorted roots', async () => {
+    const lower = (name) => name.toLowerCase();
     // Product is a flat hierarchy: 16 leaves, no edges, no "All" rollup.
     const product = await discovery.memberTree('Product');
     assert.equal(product.edgeCount, 0);
     assert.equal(product.memberCount, 16);
     assert.equal(product.forest.length, 16);
+    assert.ok(product.forest.map((node) => lower(node.name)).includes('bookcases'));
     const region = await discovery.memberTree('Region');
     assert.deepEqual(
-      region.forest.map((node) => node.name),
-      ['Central', 'East', 'South', 'West'],
+      region.forest.map((node) => lower(node.name)),
+      ['central', 'east', 'south', 'west'],
     );
     return 'Product flat 16, Region flat 4';
   });
@@ -645,6 +699,40 @@ async function phaseDataChecks(engineUp) {
     assert.ok(result.output.includes('Central'), 'output missing Central');
     assert.ok(result.output.includes('Region'), 'output missing Region header');
     return `${String(result.elapsedMs)} ms`;
+  });
+
+  await checkAsync('domainFor: gated on supportsInlineDomain, pure-domain form (§5.6)', async () => {
+    const capabilities = await engineApi.capabilities();
+    assert.equal(capabilities.supportsInlineDomain, true, 'client MUST gate domainFor on this flag');
+    const response = await engineApi.query({
+      dataset: 'Sales',
+      groupBy: [],
+      measures: [],
+      domainFor: ['Region'],
+    });
+    // Pure-domain shape: domain only, no rows/columns.
+    assert.deepEqual(response.columns, []);
+    assert.deepEqual(response.rows, []);
+    assert.deepEqual(response.dimensionNames, []);
+    const regions = response.domain.Region ?? [];
+    assert.ok(regions.length >= 4, `expected the seeded regions, saw [${regions.join(', ')}]`);
+    const lowerRegions = regions.map((name) => name.toLowerCase());
+    for (const name of ['central', 'east', 'south', 'west']) {
+      assert.ok(lowerRegions.includes(name), `domain.Region missing ${name}`);
+    }
+    return `${regions.length} members in engine display order`;
+  });
+
+  await checkAsync('domainFor: an unknown field is a loud 400 invalid_argument (§5.6)', async () => {
+    await assert.rejects(
+      () => engineApi.query({ dataset: 'Sales', groupBy: [], measures: [], domainFor: ['NotAColumn'] }),
+      (error) => {
+        assert.equal(error.status, 400);
+        assert.equal(error.code, 'invalid_argument');
+        return true;
+      },
+    );
+    return '400 invalid_argument';
   });
 
   await checkAsync('errors: unknown dataset surfaces code unknown_dataset with status 404', async () => {
@@ -769,6 +857,22 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
       return '4 columns, rowCount 36, Region is a dimension';
     });
 
+    await checkAsync('domainFor UI: a dimension column shows its domain member list', async () => {
+      await page.click('[data-column-name="Region"]');
+      await page.waitFor(
+        `document.querySelectorAll('[data-testid="domain-values"] .chip-domain').length > 0`,
+        'domain value chips',
+      );
+      const domainText = (await page.text('[data-testid="domain-values"]')).toLowerCase();
+      for (const name of ['central', 'east', 'south', 'west']) {
+        assert.ok(domainText.includes(name), `domain list missing ${name}`);
+      }
+      assert.ok(/members/.test(domainText), 'domain section lacks a member count');
+      assert.ok(/domainfor/.test(domainText), 'domain section does not cite domainFor/PROTOCOL §5.6');
+      await page.screenshot('09-domain-values.png');
+      return 'Region domain rendered from the pure-domain query';
+    });
+
     await checkAsync('system cube: #Columns expands into its own columns', async () => {
       await page.click('[data-node-id="cube:#Columns"]');
       await page.waitFor(
@@ -824,40 +928,46 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
     });
 
     await checkAsync('members: Product_Class nests All > Furniture > Bookcases with a visible weight', async () => {
+      const lower = (text) => text.toLowerCase();
       await page.click('[data-node-id="hierarchy:Product:Product_Class"]');
       await page.waitFor(
-        `document.querySelector('[data-node-id="member:Product_Class:All"]') !== null`,
+        `document.querySelector('[data-node-id="member:product_class:all"]') !== null`,
         'Product_Class members',
       );
-      await page.click('[data-node-id="member:Product_Class:All"]');
+      await page.click('[data-node-id="member:product_class:all"]');
       await page.waitFor(
-        `document.querySelector('[data-node-id="member:Product_Class:All/Furniture"]') !== null`,
+        `document.querySelector('[data-node-id="member:product_class:all/furniture"]') !== null`,
         'Furniture under All',
       );
-      await page.click('[data-node-id="member:Product_Class:All/Furniture"]');
+      await page.click('[data-node-id="member:product_class:all/furniture"]');
       await page.waitFor(
-        `document.querySelector('[data-node-id="member:Product_Class:All/Furniture/Bookcases"]') !== null`,
+        `document.querySelector('[data-node-id="member:product_class:all/furniture/bookcases"]') !== null`,
         'Bookcases under Furniture',
       );
-      const bookcasesRow = await page.text('[data-node-id="member:Product_Class:All/Furniture/Bookcases"]');
+      const bookcasesRow = await page.text('[data-node-id="member:product_class:all/furniture/bookcases"]');
       assert.ok(bookcasesRow.includes('×1'), `weight not visible on Bookcases: "${bookcasesRow}"`);
       const allChildren = await page.evaluate(
-        `Array.from(document.querySelectorAll('[data-node-id^="member:Product_Class:All/"] .tree-label')).map((el) => el.textContent)`,
+        `Array.from(document.querySelectorAll('[data-node-id^="member:product_class:all/"] .tree-label')).map((el) => el.textContent)`,
       );
-      for (const name of ['Furniture', 'Office Supplies', 'Technology']) {
-        assert.ok(allChildren.includes(name), `missing ${name} under All`);
+      const lowerChildren = allChildren.map(lower);
+      for (const name of ['furniture', 'office supplies', 'technology']) {
+        assert.ok(lowerChildren.includes(name), `missing ${name} under All`);
       }
       return 'All > Furniture > Bookcases, weight ×1';
     });
 
     await checkAsync('member details: path, hierarchy and rollup weight are shown', async () => {
-      await page.click('[data-node-id="member:Product_Class:All/Furniture/Bookcases"]');
-      await page.waitFor(`document.querySelector('.details h2')?.textContent === 'Bookcases'`, 'Bookcases details');
+      const lower = (text) => text.toLowerCase();
+      await page.click('[data-node-id="member:product_class:all/furniture/bookcases"]');
+      await page.waitFor(
+        `document.querySelector('.details h2')?.textContent?.toLowerCase() === 'bookcases'`,
+        'Bookcases details',
+      );
       const meta = await readMeta();
       assert.equal(meta.Dimension, 'Product');
       assert.equal(meta.Hierarchy, 'Product_Class');
       assert.equal(meta['Rollup weight'], '1');
-      assert.equal(meta.Path, 'All › Furniture › Bookcases');
+      assert.equal(lower(meta.Path), 'all › furniture › bookcases');
       assert.equal(meta.Children, '0');
       await page.screenshot('03-members-nested.png');
       return 'path + weight rendered';
@@ -890,6 +1000,33 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
       assert.ok(body.includes('Could not reach the engine'), 'banner lacks the network error detail');
       await page.screenshot('05-offline-state.png');
       return 'banner + retry shown';
+    });
+
+    await checkAsync('contract guard UI: protocolVersion 2 is blocked before any data request', async () => {
+      const stub = await startVersionStub(2);
+      try {
+        const stubUrl = `${baseUrl}?engine=${encodeURIComponent(stub.baseUrl)}`;
+        await page.navigate(stubUrl);
+        await page.waitFor(
+          `document.querySelector('[data-testid="version-blocked"]') !== null`,
+          'version-blocked panel',
+        );
+        const panel = await page.text('[data-testid="version-blocked"]');
+        assert.ok(panel.includes('protocolVersion 2'), `panel does not name the reported version: ${panel}`);
+        assert.ok(/contract v1/.test(panel), `panel does not name the pinned contract version: ${panel}`);
+
+        // The guard must run before any data call: only capabilities may be hit.
+        const dataHits = stub.hits.filter((hit) => !hit.endsWith('/v1/capabilities'));
+        assert.deepEqual(
+          dataHits,
+          [],
+          `data requests were sent despite the version mismatch: ${dataHits.join(', ')}`,
+        );
+        await page.screenshot('10-unsupported-version.png');
+        return 'blocked, capabilities-only traffic';
+      } finally {
+        await new Promise((resolve) => stub.server.close(resolve));
+      }
     });
   } catch (error) {
     fail('UI walkthrough (anonymous)', error);
@@ -962,6 +1099,71 @@ function findAuthEngineBinary() {
     }
   }
   return null;
+}
+
+/**
+ * Spawn an anonymous engine for phases 3–4 when no engine answers at
+ * OLAP_ENGINE_URL. Uses a COPY of the reference database (the reference itself is
+ * never loaded by a server here) and a private port; the child is killed when the
+ * run ends.
+ */
+async function startAnonymousEngine(binary) {
+  const dir = path.join(VERIFY_DIR, 'anonymous');
+  mkdirSync(dir, { recursive: true });
+  const dbPath = path.join(dir, 'database.anon.bin');
+  copyFileSync(REFERENCE_DB, dbPath);
+  const child = spawn(
+    binary,
+    ['--bind', `127.0.0.1:${ANON_PORT}`, '--db', dbPath, '--allow-anonymous'],
+    { cwd: ROOT, stdio: 'ignore' },
+  );
+  await waitForHttpOk(`http://127.0.0.1:${ANON_PORT}/v1/capabilities`, 20_000, 'anonymous engine');
+  return child;
+}
+
+/**
+ * A tiny stub engine that reports a different `protocolVersion`, used to prove the
+ * client's contract-version guard really blocks before sending any data request.
+ * It records every path it is asked for.
+ */
+async function startVersionStub(reportedVersion) {
+  const hits = [];
+  const server = createServer((req, res) => {
+    hits.push(`${req.method} ${req.url}`);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (req.url === '/v1/capabilities') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          protocolVersion: reportedVersion,
+          aggregations: ['SUM'],
+          filterOperators: ['in'],
+          maxRows: 100000,
+          supportsJoin: false,
+          supportsInlineDomain: false,
+          supportsLod: false,
+          countDistinctExact: false,
+          expressionFunctions: [],
+          authRequired: false,
+        }),
+      );
+      return;
+    }
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'version stub only serves capabilities', code: 'invalid_argument' }));
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(VERSION_STUB_PORT, '127.0.0.1', resolve);
+  });
+  return { server, hits, baseUrl: `http://127.0.0.1:${VERSION_STUB_PORT}` };
 }
 
 async function startAuthEngine(binary) {
@@ -1258,43 +1460,62 @@ async function main() {
   mkdirSync(VERIFY_DIR, { recursive: true });
   mkdirSync(SHOTS_DIR, { recursive: true });
 
-  const engineUp = await engineIsUp();
+  let anonymousEngine = null;
+  let engineUp = await engineIsUp();
+  if (!engineUp) {
+    const binary = findAuthEngineBinary();
+    if (binary !== null && existsSync(REFERENCE_DB)) {
+      console.log(`  no engine at ${ENGINE} — spawning an anonymous one on ${ANON_PORT} for this run`);
+      try {
+        anonymousEngine = await startAnonymousEngine(binary);
+        process.env.OLAP_ENGINE_URL = `http://127.0.0.1:${ANON_PORT}`;
+        engineUp = true;
+        console.log(`  engine spawned: http://127.0.0.1:${ANON_PORT} (copy of the reference database)`);
+      } catch (error) {
+        console.log(`  could not spawn an engine: ${error.message}`);
+      }
+    }
+  }
   console.log(`  engine status: ${engineUp ? 'up' : 'DOWN (data/UI checks will fail)'}`);
 
   try {
-    await phaseBuild();
-  } catch (error) {
-    // A failed typecheck/build leaves nothing meaningful to test.
-    fail('build', error);
-    return finish();
-  }
+    try {
+      await phaseBuild();
+    } catch (error) {
+      // A failed typecheck/build leaves nothing meaningful to test.
+      fail('build', error);
+      return finish();
+    }
 
-  await phaseUnit();
-  const data = await phaseDataChecks(engineUp);
+    await phaseUnit();
+    const data = await phaseDataChecks(engineUp);
 
-  let preview = null;
-  let engineRef = null;
-  try {
-    preview = await startPreviewServer();
-    const baseUrl = `http://127.0.0.1:${PREVIEW_PORT}/`;
-    await phaseAnonymousUi(engineUp, baseUrl);
+    let preview = null;
+    let engineRef = null;
+    try {
+      preview = await startPreviewServer();
+      const baseUrl = `http://127.0.0.1:${PREVIEW_PORT}/`;
+      await phaseAnonymousUi(engineUp, baseUrl);
 
-    const binary = findAuthEngineBinary();
-    if (binary === null || !existsSync(REFERENCE_DB)) {
-      console.log('\n  SKIP  authentication phases — no auth-capable serve.exe and/or reference database found.');
-      console.log('        Set OLAP_ENGINE_BIN / OLAP_ENGINE_DB to run them (see README).');
-    } else if (data === null) {
-      fail('authentication checks', new Error('skipped: the app data layer did not load'));
-    } else {
-      engineRef = { current: await startAuthEngine(binary) };
-      const authBase = `http://127.0.0.1:${AUTH_PORT}/`;
-      const authStats = await phaseAuthData(authBase, data);
-      await phaseAuthUi(baseUrl, authBase, engineRef, binary, authStats);
+      const binary = findAuthEngineBinary();
+      if (binary === null || !existsSync(REFERENCE_DB)) {
+        console.log('\n  SKIP  authentication phases — no auth-capable serve.exe and/or reference database found.');
+        console.log('        Set OLAP_ENGINE_BIN / OLAP_ENGINE_DB to run them (see README).');
+      } else if (data === null) {
+        fail('authentication checks', new Error('skipped: the app data layer did not load'));
+      } else {
+        engineRef = { current: await startAuthEngine(binary) };
+        const authBase = `http://127.0.0.1:${AUTH_PORT}/`;
+        const authStats = await phaseAuthData(authBase, data);
+        await phaseAuthUi(baseUrl, authBase, engineRef, binary, authStats);
+      }
+    } finally {
+      killTree(engineRef?.current ?? null);
+      killTree(preview);
+      await sleep(400);
     }
   } finally {
-    killTree(engineRef?.current ?? null);
-    killTree(preview);
-    await sleep(400);
+    killTree(anonymousEngine);
   }
 
   return finish();

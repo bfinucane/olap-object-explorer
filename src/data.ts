@@ -8,6 +8,7 @@
 
 export {
   EngineError,
+  SUPPORTED_PROTOCOL_VERSION,
   authToken,
   datasetPath,
   engineApi,
@@ -16,6 +17,7 @@ export {
   engineTarget,
   errorCode,
   errorText,
+  isSupportedProtocolVersion,
   isUnauthorized,
 } from './api';
 export { discovery, resetDiscoveryCache } from './discovery';

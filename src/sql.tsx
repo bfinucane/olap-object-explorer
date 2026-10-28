@@ -7,12 +7,17 @@ const DEFAULT_SQL = 'SELECT Region, Segment, Category, value FROM Sales';
 
 /**
  * SQL console passthrough: `POST /v1/sql` returns a formatted TEXT table, not
- * rows (handoff §3), so the output is rendered in a <pre> exactly as sent.
+ * rows, so the output is rendered in a <pre> exactly as sent.
  *
- * The note about default members is not decoration: the SQL path injects one
- * default member per unnamed dimension, so a query that names no dimensions is
- * a small subset, not the full cube (handoff §5.5). The query API does not do
- * this; that is why the tree uses it instead.
+ * The contract (PROTOCOL §0.5) classes this as engine tooling (tier T3), not a
+ * client data path: clients MUST NOT depend on it. Two known engine gaps make its
+ * output misleading in specific cases (PROTOCOL §11.6/§11.7), so the console says
+ * so in the UI instead of letting a user trust a silent wrong answer.
+ *
+ * The default-member note is not decoration either: the SQL path injects one
+ * default member per unnamed dimension, so a query that names no dimensions is a
+ * small subset, not the full cube. The query API does not do this; that is why the
+ * tree and the details pane use it instead.
  */
 export function SqlConsole() {
   const [sql, setSql] = useState(DEFAULT_SQL);
@@ -57,6 +62,14 @@ export function SqlConsole() {
         Only <code>SELECT</code> is accepted. Unnamed dimensions default to their first member on
         this path, so name every dimension you care about; system cubes are exempt and read all
         rows. Ctrl+Enter runs.
+      </p>
+
+      <p className="hint" data-testid="sql-gaps">
+        <strong>Known engine gaps on this tooling path</strong> (contract §11.6/§11.7):{' '}
+        <code>GROUP BY</code>/<code>HAVING</code>/<code>DISTINCT</code> are parsed but ignored —
+        project the dimensions explicitly; and <code>COUNT</code> over a text column returns the
+        last text, not a cell count — use <code>COUNTD</code> for text. This surface is not a
+        client data path (contract §0.5); the tree and details pane use the query API.
       </p>
 
       <textarea

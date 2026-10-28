@@ -6,11 +6,12 @@ A standalone, **read-only** SSMS-style object browser for the **Patricia OLAP en
 It answers *"what is in this database, and how is it structured?"* without the user
 knowing any cube, dimension or hierarchy name in advance: cubes and their columns,
 dimensions → hierarchies → members nested through the engine's edge table with rollup
-weights, a details pane, a paged row preview, a SQL console, and — for engines with
-authentication enabled — a sign-in form.
+weights, a details pane with member domains, a paged row preview, a SQL console, and — for
+engines with authentication enabled — a sign-in form.
 
-Nothing in the engine is modified, and nothing is ever written: the engine has no write
-API (handoff §5.9) and this client only reads.
+This client is **read-only by design**: it adopts the suite contract at tiers T0–T3 and
+deliberately does not adopt T4 writeback (the engine *does* support writes — see
+[Contract conformance](#contract-conformance)). Nothing in the engine tree is modified.
 
 ![Details pane for Sales](docs/screenshots/01-sales-details.png)
 
@@ -36,7 +37,7 @@ pnpm run preview      # serves the built UI on http://127.0.0.1:5182
 # Windows convenience: start.cmd  (or start.cmd -Dev) — same thing, opens the browser
 ```
 
-The engine's CORS is off by default (handoff §2), so the Vite dev/preview server proxies
+The engine's CORS is off by default (PROTOCOL §0.4), so the Vite dev/preview server proxies
 `/v1` to the engine: the browser sees one origin and no `-Cors` restart is needed.
 
 > Port: defaults to **5182**; `set PORT=<n>` before `start.cmd` overrides it.
@@ -55,23 +56,50 @@ explorer then opens directly and labels the engine "anonymous".
 
 ---
 
+## Contract conformance
+
+This client targets the suite contract **v1** (`protocolVersion 1`). The normative text is
+`contract/PROTOCOL.md` in the workspace that owns the engine; it is deliberately **not
+vendored** here (contract DECISIONS **D8** keeps `contract/` out of any tree for now), so the
+pin lives in this README and in one code comment (`src/types.ts`).
+
+| | |
+| --- | --- |
+| Pinned contract | **v1** == `protocolVersion 1` |
+| Tiers claimed | **T0–T3** — T2 met under contract DECISIONS **D1** / PROTOCOL §1.4 (browser `sessionStorage` token) |
+| T4 writeback | **not adopted by design** — the engine supports `POST /v1/{dataset}/write` and `POST /v1/save` (`capabilities.supportsWrite: true`); this product does not write |
+| Verified against | engine **HEAD `33ae673`** (contract v1; wire pin `d6b02e0`), 2026-10-28 — later engine commits are additive/fix-only within v1 |
+| Evidence | `pnpm run typecheck` exit 0; `pnpm run verify` **54/54 checks, exit 0** (see [Verification](#verification)) |
+
+The client validates `capabilities.protocolVersion` before any data request and shows a
+blocking **"Unsupported contract version"** state on a mismatch (PROTOCOL §0.3/§12): a v2
+engine could change field meanings, so "try anyway" is exactly the silent-wrong-answer
+failure mode the contract forbids. Member identity is matched case-insensitively while
+labels keep the casing each endpoint returned (the reference database currently returns
+`#Members` lowercased but `#Edges`/query values in original casing — reported as a finding).
+
+---
+
 ## What the tree shows
 
 | Level | Source | Notes |
 | --- | --- | --- |
-| Root | `GET /v1/datasets` | split into **Cubes** (7) and **System cubes** (6) |
+| Root | `GET /v1/datasets` | split into **Cubes** and **System cubes** by the `#` prefix (the reference database currently lists 7 user + 8 system cubes, including the `#TableSecurity`/`#DimensionSecurity` control cubes) |
 | Cube → columns | `GET /v1/{cube}` (describe) | kind, type, cardinality, nullable, min/max |
 | Dimensions | `#Dimensions` | 8 dimensions, each with its hierarchy count |
 | Dimension → hierarchies | `#Hierarchies` | e.g. `Product` → `Product`, `Product_Class` |
 | Hierarchy → members | `#Members` + `#Edges`, folded client-side | nested parent/child, rollup weight shown as `×1` |
+| Dimension column → domain | `POST /v1/{dataset}/query` with `domainFor` | full member list in engine display order (PROTOCOL §5.6) |
 
 Every level is lazy: expanding a row issues the one query it needs. Expanding the same row
 again does not hit the engine (promise-level cache; **Refresh** clears it).
 
 Member nesting is a client-side fold (`src/memberTree.ts`): roots are members that never
 appear as an edge child, "All" sorts first, then natural order (`Item 2` before `Item 10`).
-A member with several parents (a shared rollup) appears under each parent; weights of
-`0.5` are preserved and unit-tested. Cycles and self-edges cannot hang the renderer.
+Member **identity is case-insensitive** (the engine dictionary is), so a saved database whose
+`#Members` and `#Edges` disagree on casing still folds into one tree; labels keep the
+`#Members` casing. A member with several parents (a shared rollup) appears under each parent;
+weights of `0.5` are preserved and unit-tested. Cycles and self-edges cannot hang the renderer.
 
 ![Nested members with weights](docs/screenshots/03-members-nested.png)
 
@@ -79,14 +107,22 @@ A member with several parents (a shared rollup) appears under each parent; weigh
 
 - **Details** — cube metadata (`rowCount`, `measureDimension`, `isAttributeTable`,
   `primaryKey`, `isSystem`) plus a columns table; column, dimension, hierarchy and member
-  views with breadcrumbs. Member view shows the full path, children and rollup weight.
+  views with breadcrumbs. Selecting a dimension column appends its **Domain**: the full
+  member list in engine display order, fetched with `domainFor` (PROTOCOL §5.6) and gated on
+  `capabilities.supportsInlineDomain`. Member view shows the full path, children and rollup
+  weight.
 - **Preview** — paged `sample` grid (10/25/50/100 rows, prev/next/first, nulls shown as
-  `null`). See the [finding about `/sample`](#findings-about-the-engine-report-only).
+  `null`). `sample` returns stored leaf rows for the cube's dimension columns; the implicit
+  measure `value` column is not part of it (PROTOCOL §4), and the pane says so — use the SQL
+  console or the query API for measures.
 - **SQL console** — `POST /v1/sql` passthrough rendered as the engine's formatted text
-  table; Ctrl+Enter runs. This is the engine's SQL path, so its quirks are the engine's:
-  unnamed dimensions default to their first member (see the in-app note; handoff §5.5).
+  table; Ctrl+Enter runs. The contract classes this as engine tooling, not a data path
+  (PROTOCOL §0.5), and two known engine gaps are stated in the pane (§11.6 `GROUP`/`HAVING`
+  parsed-but-unread, §11.7 `COUNT` over text): unnamed dimensions also default to their first
+  member on this path, so name every dimension you care about.
 
 ![Preview grid](docs/screenshots/02-sales-preview.png)
+![Domain values for a dimension column](docs/screenshots/09-domain-values.png)
 
 ## Sign in
 
@@ -98,7 +134,12 @@ the form returns with a "session expired" note instead of a tree full of errors.
 tokens against an `-Anonymous` engine are detected and cleared (no dead-end login screen).
 
 `?token=<token>` still works for scripted access: it is moved into sessionStorage and
-stripped from the address bar. Anonymous engines never show the form.
+stripped from the address bar. Anonymous engines never show the form. Token storage follows
+contract DECISIONS **D1** / PROTOCOL **§1.4**: memory or `sessionStorage` only, never
+`localStorage`, a URL, a log or the UI, and the token is dropped on any 401.
+
+If the engine reports a different `protocolVersion`, the sign-in flow is preceded by a
+blocking **Unsupported contract version** screen (no data requests are sent).
 
 ![Sign-in form](docs/screenshots/06-login.png)
 ![Signed in](docs/screenshots/07-authenticated.png)
@@ -108,17 +149,20 @@ stripped from the address bar. Anonymous engines never show the form.
 ## How it works
 
 - **`src/api.ts`** — typed fetch client. Percent-encodes every dataset path segment
-  (`#Members` → `%23Members`, handoff §5.1), maps engine errors to an `EngineError`
-  carrying `status`, `code` and `error`, and surfaces both in the UI.
+  (`#Members` → `%23Members`, PROTOCOL §0.2), maps engine errors to an `EngineError` carrying
+  `status`, `code` and `error`, and surfaces both in the UI. Pins
+  `SUPPORTED_PROTOCOL_VERSION = 1`; every query body carries it.
 - **`src/auth.ts`** — token/session state (`sessionStorage` + memory), `?token=` seeding,
   sign-out, and the single "session expired" path taken when any request 401s.
 - **`src/login.tsx`** — the sign-in form; `POST /v1/login` failures are shown verbatim.
-- **`src/discovery.ts`** — the six system cubes, one query per level, promise-cached.
-  Structural reads always use `POST /v1/{dataset}/query`, never the SQL console, because
-  the SQL path injects default members (handoff §5.5).
-- **`src/memberTree.ts`** — pure fold from members + edges to a forest. No imports, no
-  I/O, unit-tested directly (including empty input).
-- **`src/tree.tsx` / `details.tsx` / `preview.tsx` / `sql.tsx` / `App.tsx`** — UI.
+- **`src/discovery.ts`** — the system cubes, one query per level, promise-cached. Structural
+  reads always use `POST /v1/{dataset}/query`, never the SQL console. It also owns the
+  pure-domain request behind the details pane's member lists (`domainFor`, §5.6).
+- **`src/memberTree.ts`** — pure fold from members + edges to a forest, with case-insensitive
+  member identity. No imports, no I/O, unit-tested directly (including empty input and mixed
+  casing).
+- **`src/tree.tsx` / `details.tsx` / `preview.tsx` / `sql.tsx` / `App.tsx`** — UI. `App.tsx`
+  owns the contract pin (`protocolVersion` guard), the auth gate and the shell state.
 - **`src/data.ts`** — barrel entry for the data layer. If this ever folds into Plateau,
   this (plus `api`/`discovery`/`memberTree`/`auth`) is the piece to lift; the React UI is
   the standalone shell.
@@ -137,137 +181,123 @@ Default behaviour (no parameters) is same-origin through the Vite proxy, with CO
 
 ## Verification
 
-`tools/verify.mjs` is a self-contained harness. It spawns and kills its own children (a
-Vite preview server on 5199, headless Chrome, and for the auth phase a second engine
-instance on 8097 against a throwaway database copy); it leaves no server running. Run it
-with the engine up:
+`tools/verify.mjs` is a self-contained harness. It spawns and kills its own children — the
+Vite preview server (5199), headless Chrome, and engine processes: an anonymous one (8096)
+when no engine answers at `OLAP_ENGINE_URL`, an auth-enabled one (8097) for the auth phase,
+and a tiny `protocolVersion: 2` stub (8098) for the version guard. It leaves nothing running.
 
 ```powershell
 pnpm run verify
 ```
 
-It needs the engine's HTTP API at `OLAP_ENGINE_URL` (default 8080) and uses two optional
-external paths, both overridable by environment variable:
+Environment overrides (all optional; workspace defaults shown):
 
-| Variable | Default (workspace layout) | Used for |
+| Variable | Default | Used for |
 | --- | --- | --- |
-| `OLAP_ENGINE_BIN` | `../olap-target-verify/debug/serve.exe` or `../Patricia/olap_engine/target/debug/deps/serve.exe` | a build that has `POST /v1/login` — runs the auth phase |
-| `OLAP_ENGINE_DB` | `../Patricia/olap_engine/database.bin` | copied (never loaded in place) so the spare engine has data |
+| `OLAP_ENGINE_URL` | `http://127.0.0.1:8080` | live engine for the data/UI phases |
+| `OLAP_ENGINE_BIN` | `../olap-target-verify/debug/serve.exe`, `../Patricia/olap_engine/target/debug/deps/serve.exe`, `../Patricia/olap_engine/target/debug/serve.exe` | engine binary for the spawned anonymous + auth instances |
+| `OLAP_ENGINE_DB` | `../Patricia/olap_engine/database.bin` | copied (never loaded in place) for spawned engines |
+| `VERIFY_PORT`, `VERIFY_ANON_PORT`, `VERIFY_AUTH_PORT`, `VERIFY_STUB_PORT`, `VERIFY_CDP_PORT` | 5199 / 8096 / 8097 / 8098 / 9333 | port overrides |
+| `CHROME_PATH` | auto-detected Chrome/Edge | headless browser |
 
-When neither is available the auth phases are **skipped with a message**, not failed, so the
-build/data/UI phases still run in a plain clone. Phases 3–5 need a live engine; phases 1–2
-(and the build) do not.
+When no engine binary/reference database is available, phases 3–5 report a skip and phases
+1–2 still run, so a plain clone gets build + unit coverage.
 
-Five phases, **48 checks, all green** against the seeded database (35 when the auth phase is
-skipped):
+Five phases, **54 checks, all green** (2026-10-28, engine HEAD `33ae673`):
 
 1. `tsc --noEmit` and a production `vite build`.
 2. Unit tests for the member fold: empty input, flat hierarchies, nesting, "All" ordering,
-   natural sort, shared rollup with weight 0.5, cycles/self-edges, path flattening.
-3. Live data checks using the app's own `src/data.ts` (bundled with esbuild, run from Node
-   against 8080): datasets split, `Sales` has 36 rows, 8 dimensions with counts, `Product`
-   has exactly `Product`+`Product_Class`, `Product_Class` folds to
-   `All → Furniture → Bookcases`, flat `Product`/`Region` render as roots, sample shape,
-   SQL passthrough, and a 404 `unknown_dataset` surfacing correctly.
-4. A headless-Chrome walkthrough of the **anonymous** engine over CDP: no login form, click
-   `Sales`, expand its columns, expand `#Columns`, read 10 preview rows, expand `Product` →
-   `Product_Class` → `All` → `Furniture` → `Bookcases`, assert `×1` and the member details
-   (path + rollup weight), run a SQL statement, assert no page/console errors, and navigate
-   to an unreachable engine to assert the offline banner instead of a crash.
-5. **Authentication against a real engine with auth enabled.** When the 8080 binary predates
-   auth, the harness runs an already-built auth-capable `serve.exe` on port 8097 against a
-   **copy** of `database.bin` (under `.verify/`; the reference is never loaded by the server),
-   creates a throwaway user with `--add-user`, and checks the contract plus the UI:
-   capabilities is public with `authRequired: true`; data routes 401 without a token; a wrong
-   password 401s; login returns a 64-hex token and roles; the token unlocks discovery; clearing
-   it 401s. In the browser: the login form replaces the shell, a wrong password shows the
-   engine's message, a correct one loads the tree and header user, a reload keeps the session,
-   Sign out returns to the form, and **restarting the engine mid-session** produces the
-   "session expired" re-login rather than a broken tree.
+   natural sort, shared rollup with weight 0.5, cycles/self-edges, path flattening, and
+   case-insensitive identity with mixed `#Members`/`#Edges` casing.
+3. Contract + live data checks using the app's own `src/data.ts`: the pinned protocol version
+   and its refusal of v2; capabilities; datasets split; `Sales` 36 rows; 8 dimensions;
+   `Product` two hierarchies; `Product_Class` folds to `All → Furniture → Bookcases`; flat
+   hierarchies; sample shape; SQL passthrough; the `domainFor` pure-domain form plus the loud
+   `invalid_argument` for an unknown field; 404 `unknown_dataset`; empty input.
+4. Headless-Chrome walkthrough of the anonymous engine: no login form, select `Sales`, expand
+   columns, open a dimension column's **Domain**, expand `#Columns`, read preview rows, expand
+   `Product → Product_Class → All → Furniture → Bookcases` (case-insensitive assertions,
+   weight `×1`, member details), run SQL, confirm a clean console, assert the offline banner
+   for an unreachable engine, and assert a **protocolVersion 2 stub** is blocked before any
+   data request (only `/v1/capabilities` is hit).
+5. Authentication against a real engine with auth enabled on a **copy** of `database.bin`:
+   public capabilities with `authRequired: true`, 401s without a token, wrong-password 401,
+   login token/roles, authenticated discovery, clearing the token 401s; in the browser the
+   login form replaces the shell, the engine's error is shown verbatim, sign-in loads the tree
+   with the header user, reload keeps the session, Sign out returns to the form, and an engine
+   restart mid-session produces the "session expired" re-login.
 
-Screenshots: `01`–`05` from the anonymous walkthrough, `06`–`08` from the auth phase
-(`06-login.png`, `07-authenticated.png`, `08-session-expired.png`).
+Screenshots: `01`–`05` anonymous walkthrough, `06`–`08` auth phase, `09-domain-values.png`,
+`10-unsupported-version.png`.
 
-### Acceptance criteria from the handoff
+### Acceptance criteria (engine handoff + contract adoption)
 
 | Criterion | Covered by |
 | --- | --- |
-| `Sales` shows dimensions Region/Segment/Category | data check + browser walkthrough |
+| `Sales` shows dimensions Region/Segment/Category | data check + walkthrough |
 | `Product` shows two hierarchies (`Product`, `Product_Class`) | data check + walkthrough |
-| `Product_Class` nests `All → Furniture → Bookcases` | data check + walkthrough |
+| `Product_Class` nests `All → Furniture → Bookcases` | data check + walkthrough (case-insensitive labels) |
 | A member's weight is visible | `×1` in the tree, "Rollup weight 1" in details |
-| A fresh/empty database renders (0 rows, no crash) | unit test for empty input; empty-state branches in the UI |
-| No 404s on system-cube paths | data check (`%23Members` query, describe of `#Columns`) |
-| The explorer never writes | only GET + `query`/`sql` POSTs are issued; by construction |
+| A fresh/empty database renders (0 rows, no crash) | unit test for empty input; empty-state branches |
+| No 404s on system-cube paths | `%23Members` query + describe of `#Columns` |
+| Contract pin + `protocolVersion` validation | pinned-v1 unit check + v2 stub UI guard |
+| `domainFor` exercised (T1 clause) | data checks + Domain pane + unknown-field error |
+| T2 auth under D1 | token is memory/`sessionStorage`; auth phase above |
+| Read-only by design (T4 not adopted) | only GET + `query`/`sql` POSTs are issued |
 
-A truly empty database was not pointed at live (that needs another engine instance). The
+A truly empty database was not pointed at live (that needs a separate engine instance). The
 folding is tested on empty input and the UI has explicit 0-row/empty states.
 
 ---
 
 ## Findings about the engine (report only — nothing patched)
 
-These are the places where the running engine and/or the handoff differ from what I found
-while building. All are read-only observations; the engine session owns the fixes.
+Read-only observations from building and verifying this client; the engine/contract sessions
+own the fixes. Contract section numbers refer to `contract/PROTOCOL.md` (§11 = open breaks).
 
-1. **Authentication is newer than the running binary, and the handoff does not mention it.**
-   `Patricia/olap_engine` at HEAD `afc235c` ("fix(auth): capabilities is PUBLIC…") implements
-   `POST /v1/login`, bearer tokens and `capabilities.authRequired`; `start-engine.ps1` says
-   authentication is required by default since the S1 security work and offers `-Anonymous`
-   for development. The **running 8080 instance predates this** (built 2026-10-22): it has no
-   `/v1/login` (returns `Unknown operation '' for dataset 'login'`), its `capabilities` has no
-   `authRequired`, and it serves anonymously. A post-auth binary *does* exist on disk
-   (`olap-target-verify/debug/serve.exe`, 23 Oct, and `target/debug/deps/serve.exe`) and was
-   used to verify the login flow against the real contract. Consequence of a rebuild: plain
-   `start-engine.cmd` will need users created with `serve.exe --add-user`, or `-Anonymous`.
-   The explorer handles all three states: anonymous, login required, session expired.
-2. **`GET /v1/{dataset}/sample` omits the measure (`value`) column.** For `Sales`, describe
-   reports `Region, Segment, Category, value` but sample returns only
-   `["Region","Segment","Category"]` (3 columns, 3 cells/row) — verified across `Sales`,
-   `Pivot`, `Attributes`, `#Columns`. Cubes with a measure dimension still include the
-   measure *dimension* column (e.g. `Geography` → `["Geo","Measure"]`), but never the fact
-   `value`. The preview shows what the engine returns and states this in the pane; for
-   measure values the SQL console is the working path. Worth either fixing in `/sample` or
-   documenting, because a data preview without measures is half a preview.
-2. **`GET /v1/{dataset}/sample` omits the measure (`value`) column.** For `Sales`, describe
-   reports `Region, Segment, Category, value` but sample returns only
-   `["Region","Segment","Category"]` (3 columns, 3 cells/row) — verified across `Sales`,
-   `Pivot`, `Attributes`, `#Columns`. Cubes with a measure dimension still include the
-   measure *dimension* column (e.g. `Geography` → `["Geo","Measure"]`), but never the fact
-   `value`. The preview shows what the engine returns and states this in the pane; for
-   measure values the SQL console is the working path. Worth either fixing in `/sample` or
-   documenting, because a data preview without measures is half a preview.
-3. **`describe` on a system cube includes a trailing `value` column.** Handoff §4 lists
-   `#Columns` as 3 columns; `GET /v1/%23Columns` returns 4 (`…, "value"`). Not harmful —
-   the UI renders what describe returns — but the doc should say 4.
-4. **`#Cubes` properties need a second grouping.** A `#Cubes` query grouped only by `#Cube`
+1. **Member casing is inconsistent across the wire, and the reference database shows it.**
+   At engine HEAD `33ae673` with the current `database.bin`, `#Members` returns lowercased
+   names (`central`, `furniture`, `bookcases`, …) while `#Edges` parent references and
+   `query`/`domainFor` cells return the registered casing (`Furniture`, `Central`). A
+   case-sensitive fold tears `Product_Class` into four roots. The client now matches member
+   identity case-insensitively (unit-tested) and displays `#Members` casing; the engine
+   should return one casing everywhere. The contract has no member-casing rule to cite,
+   unlike `/v1/datasets` (§2, “exact stored casing”).
+2. **Authentication/security postdate the original handoff.** Engine HEAD `33ae673` has
+   `POST /v1/login`, bearer tokens, `capabilities.authRequired` (`true` by default, `false`
+   under `--allow-anonymous`) and the `#TableSecurity`/`#DimensionSecurity` control cubes.
+   `olap-object-explorer-handoff.md` §2/§3 predates all of it. The client feature-detects
+   auth and handles anonymous, login-required and expired-session states.
+3. **`/sample` returns dimension columns only, and that is contractual.** PROTOCOL §4 defines
+   `sample` as stored leaf rows for the cube's dimension columns; the implicit measure
+   `value` is not included. The preview shows what the engine returns and says so — measures
+   come from `POST query` or the SQL console. Not a defect.
+4. **`#Columns` describe includes a trailing `value` column** — documented by PROTOCOL §3.3
+   (implicit `value` for measure-less cubes). The UI renders all 4 columns.
+5. **`#Cubes` properties need a second grouping.** A `#Cubes` query grouped only by `#Cube`
    returns the cube with a `value` cell; `measureDimension`/`isAttributeTable` appear only
-   when grouping by `#Cube` **and** `#Property`. The explorer sidesteps this because
-   `describe` already carries both fields, so `#Cubes` as a dataset is currently unused.
-5. **`Product` is a flat hierarchy, `Product_Class` is the nested one.** `Product` has 16
-   leaf members and no edges (no `All` root); `Product_Class` has 20 members (16 leaves +
-   `All` + 3 aggregates) and 19 edges. The handoff's "20 rows" is correct for
-   `Product_Class`; both render correctly (a flat hierarchy is just a sorted list of roots).
-6. **CORS is off**, confirmed: `GET /v1/datasets` with an `Origin` header returns no
-   `Access-Control-Allow-Origin`. The proxy route works as recommended.
-7. **The SQL default-member gotcha is real and visible.** `SELECT Region, value FROM Sales`
-   in the SQL console returns the small default-member subset (`Central 431092.09 …`), not
-   the full `POST query` totals (`Central 6436941.57 …`). The console carries an in-app note.
-8. **`Account` is a deliberately "mixed" dimension — and its seed import silently loses
-   relations.** `examples/Plateau/seed.sql` §7 calls CostCentre's `Account` dimension "the
-   mixed Total tree … its members span what are, elsewhere, two different dimensions", so the
-   members really are named `Region: …` / `Category: …` and the explorer renders them
-   faithfully (verified against `#Members` and `#Edges`). The underlying defect:
-   `examples/Plateau/hierarchy-parent-child.csv` declares **16** parent-child rows (each
-   `Category:` child under all four Regions), but `#Edges` returns only **7** — the engine
-   enforces one-parent-per-hierarchy (`src/dimension/hierarchy.rs` `link`, "one-parent rule")
-   and **re-parents** a repeated child, and `.import_pc` (`src/main.rs`) ignores the returned
-   old parent instead of warning the way `.rollup` does ("moved from … to …"). So nine declared
-   relations vanish and the `Category:` accounts end up only under `Region: South` (the last
-   CSV block). Either `.import_pc` should report re-parenting or the seed should encode a real
-   tree; a client cannot recover edges the engine never stored. The explorer's fold already
-   handles genuine multi-parent edges (unit-tested), so it would show a shared child under each
-   parent if the engine ever produced them.
+   when grouping by `#Cube` **and** `#Property`. The client sidesteps this via `describe`.
+6. **`Product` is flat (`16` leaves, no `All`), `Product_Class` is nested** (`20` members,
+   `19` edges, `All` root) — correct in the reference database; both render correctly.
+7. **CORS is off by default** (§0.4) and the proxy route works; the client also supports a
+   CORS-enabled direct `?engine=` mode.
+8. **SQL tooling gaps are real** — default-member injection plus §11.6 (`GROUP BY`/`HAVING`
+   parsed-but-unread) and §11.7 (`COUNT` over text returns the last text). The console states
+   both gaps in the UI; the tree/details never depend on the SQL surface (§0.5).
+9. **`Account` is a deliberately “mixed” dimension — and its seed import silently loses
+   relations.** `examples/Plateau/seed.sql` §7 calls CostCentre's `Account` dimension “the
+   mixed Total tree … its members span what are, elsewhere, two different dimensions”, so the
+   members really are named `Region: …` / `Category: …` and the client renders them faithfully.
+   The defect: `examples/Plateau/hierarchy-parent-child.csv` declares **16** parent-child rows
+   (each `Category:` child under all four Regions) but `#Edges` stores only **7** — the engine
+   enforces one-parent-per-hierarchy (`src/dimension/hierarchy.rs` `link`, “one-parent rule”)
+   and re-parents repeated children, while `.import_pc` (`src/main.rs`) discards the returned
+   old parent instead of warning like `.rollup` does. Nine declared relations vanish and the
+   `Category:` accounts end up only under `Region: South` (the last CSV block). Either
+   `.import_pc` should report re-parenting or the seed should encode a real tree.
+10. **System cubes can lag after HTTP writes** (§11.5): the structure tree reads `#Cubes`/
+   `#Members`/`#Edges`, so after *another* writer's HTTP writes the tree may be stale until a
+   catalogue reload — user-cube reads are always current.
 
 ---
 
@@ -275,8 +305,8 @@ while building. All are read-only observations; the engine session owns the fixe
 
 - **Measure-aware preview — not needed (decided).** The Preview keeps showing raw `/sample`
   rows. Showing measure values without the aggregation context they belong to is noise in an
-  object browser, and handoff §6 already calls a real measure grid "a bigger job, not required
-  for v1". The SQL console remains the path when you need numbers.
+  object browser, and the contract keeps T4/measure-grid work out of the required surface.
+  The SQL console remains the path when you need numbers.
 - **Ownership — stays standalone (decided).** If it ever folds into Plateau, `src/data.ts` is
   the boundary to lift; nothing is being built for that now.
 - **Anything else for v1.1?** Candidates: tree filter/search, remembering expansion across
@@ -284,7 +314,9 @@ while building. All are read-only observations; the engine session owns the fixe
 
 ## Deliberately not done (v1)
 
-- No write affordances (the engine has no write API).
+- **T4 writeback.** The engine supports `POST /v1/{dataset}/write` and `POST /v1/save`
+  (`capabilities.supportsWrite: true`); this product is read-only by design and offers no
+  edit/save affordance.
 - No measure-aware grid in the Preview: measures without aggregation context are noise
   (decided with the user).
 - No tree filter/search; no persisted expansion/selection; no virtualisation. Structural
@@ -304,8 +336,10 @@ while building. All are read-only observations; the engine session owns the fixe
   the environment table under Verification).
 - **No self-started servers in normal use.** `start.cmd`/`pnpm run dev` are for *your*
   terminal. `tools/verify.mjs` starts its helpers as children of a single test run and kills
-  them before exiting: a Vite preview server, headless Chrome, and — for the auth phase only —
-  a second `serve.exe` on port 8097 against a throwaway `database.bin` copy under `.verify/`.
+  them before exiting: a Vite preview server, headless Chrome, and engine processes —
+  anonymous (8096) if no engine is running, auth-enabled (8097) for the auth phase, and a
+  tiny version stub (8098). All engine processes use throwaway `database.bin` copies under
+  `.verify/`; the reference is never loaded in place.
 - **Creating users for an auth-enabled engine.** The engine's security file defaults to
   `security.json` beside the database. Create users once with
   `serve.exe --add-user <name> --role <role> --password <password>` (or use the engine's
@@ -317,5 +351,5 @@ while building. All are read-only observations; the engine session owns the fixe
   note for older pnpm. On a fresh clone: `pnpm install` (network) then `pnpm run build`.
 - **Verification needs looser process permissions when run inside a sandbox.** The build
   toolchain (esbuild) and the browser walkthrough spawn child processes with piped stdio,
-  which a file/process sandbox can block. Nothing outside this folder (apart from a read of
-  the engine's `database.bin` for the auth copy) is touched by it.
+  which a file/process sandbox can block. Nothing outside this folder (apart from reading the
+  engine's `database.bin` to make throwaway copies) is touched by it.

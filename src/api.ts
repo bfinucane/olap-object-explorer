@@ -1,18 +1,20 @@
 /**
  * Thin, typed client for the engine's read-only HTTP API.
  *
- * Two environment facts drive the design:
+ * Contract: suite contract **v1** (== `protocolVersion 1`), normative text
+ * `contract/PROTOCOL.md` in the engine workspace (not vendored here). Two facts
+ * drive the transport design:
  *
  * 1. `#` in a dataset name is a URL fragment and never reaches the server, so
  *    every dataset path segment is percent-encoded (`#Members` -> `%23Members`,
- *    handoff §5.1).
- * 2. Engine CORS is off by default (handoff §2), so in the browser the base URL
- *    is empty and requests go through the Vite proxy on the same origin. A
+ *    PROTOCOL §0.2).
+ * 2. Engine CORS is off by default (PROTOCOL §0.4), so in the browser the base
+ *    URL is empty and requests go through the Vite proxy on the same origin. A
  *    `?engine=<url>` query parameter is supported for talking to a CORS-enabled
  *    engine directly, which is useful when this app is served some other way.
  *
  * `engineBase()` is deliberately lazy (never runs at module load) so that the
- * data layer can also be bundled and exercised from Node by tools/verify-data.mjs.
+ * data layer can also be bundled and exercised from Node by tools/verify.mjs.
  */
 
 import type {
@@ -26,6 +28,18 @@ import type {
   SqlResponse,
 } from './types';
 import { getToken, signalUnauthorized } from './auth';
+
+/**
+ * The contract version this client implements. Suite contract v1 == protocol
+ * version 1 (PROTOCOL §0.3). `capabilities.protocolVersion` is validated against
+ * this before any data request; a mismatch blocks the shell rather than sending
+ * requests a v2 engine might interpret differently.
+ */
+export const SUPPORTED_PROTOCOL_VERSION = 1;
+
+export function isSupportedProtocolVersion(reported: number): boolean {
+  return reported === SUPPORTED_PROTOCOL_VERSION;
+}
 
 export class EngineError extends Error {
   readonly status: number;
@@ -201,10 +215,14 @@ export const engineApi = {
     return request<SampleResponse>(`${datasetPath(dataset)}/sample?${params.toString()}`);
   },
 
+  /**
+   * POST /v1/{dataset}/query. Every body carries `protocolVersion` (PROTOCOL
+   * §0.3); callers may not override it with a different contract version.
+   */
   query(options: QueryRequest): Promise<QueryResponse> {
     return postJson<QueryResponse>(`${datasetPath(options.dataset)}/query`, {
-      protocolVersion: 1,
       ...options,
+      protocolVersion: SUPPORTED_PROTOCOL_VERSION,
     });
   },
 

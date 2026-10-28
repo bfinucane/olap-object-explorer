@@ -1,15 +1,19 @@
 /**
  * Wire types for the Patricia OLAP engine HTTP API.
  *
- * The normative contract is `tableau-clone/docs/ENGINE-PROTOCOL.md`, but the
- * engine is ahead of that document; these types follow the verified snapshot in
- * `olap-object-explorer-handoff.md` §3–§4 and were re-probed against the live
- * engine on 8080 before this file was written.
+ * **Contract:** suite contract **v1** (== `protocolVersion 1`). The normative
+ * text is `contract/PROTOCOL.md` in the workspace that owns the engine; it is
+ * deliberately NOT vendored into this repository (contract `README.md` §Adoption
+ * protocol / DECISIONS D8). This client pins contract v1 and was verified against
+ * engine HEAD `d6b02e0` (2026-10-28).
  *
- * Read-only: the engine has no write API, and nothing here attempts one.
+ * The engine tree and the contract folder belong to other sessions; this client
+ * only reads the wire. It is read-only by design: tiers T0–T3 are adopted, T4
+ * writeback is not (the engine supports it — `supportsWrite`, PROTOCOL §7/§8 —
+ * this product simply does not write).
  */
 
-/** A cell as it arrives in JSON. Absent measure cells are `null` (handoff §5.6). */
+/** A cell as it arrives in JSON. Absent measure cells are `null` (PROTOCOL §5.10). */
 export type Cell = string | number | null;
 
 export interface Capabilities {
@@ -23,11 +27,16 @@ export interface Capabilities {
   countDistinctExact: boolean;
   expressionFunctions: string[];
   /**
-   * Present on engines with authentication: true means every /v1 route except
-   * /v1/capabilities and /v1/login needs a bearer token. Undefined on older
-   * engines (the one serving the seeded database today does not send it).
+   * Whether a bearer token is required (PROTOCOL §1.1/§6.1). Absent must be read
+   * as `false` (older engine); this engine overrides it from its launch flags, so
+   * read the live response, never the snapshot file.
    */
   authRequired?: boolean;
+  /**
+   * Whether `POST /v1/{dataset}/write` and `POST /v1/save` exist (PROTOCOL §7/§8).
+   * This client never writes, but the report is typed so the claim stays honest.
+   */
+  supportsWrite?: boolean;
 }
 
 export interface DatasetsResponse {

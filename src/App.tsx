@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  SUPPORTED_PROTOCOL_VERSION,
   engineApi,
   engineBase,
   engineLabel,
   engineTarget,
   errorCode,
   errorText,
+  isSupportedProtocolVersion,
   isUnauthorized,
 } from './api';
 import {
@@ -48,20 +50,29 @@ type AuthView = { status: 'checking' } | { status: 'login'; reason: 'required' |
 /**
  * Shell for the standalone object explorer.
  *
+ * Contract: suite contract v1 (== `protocolVersion 1`), normative
+ * `contract/PROTOCOL.md` in the engine workspace; the client pins v1 and refuses
+ * to run against any other `capabilities.protocolVersion` (PROTOCOL §0.3/§12).
+ *
  * Data flow: every tree level is loaded on first expand through `discovery` (one
  * engine query per level, promise-cached). Selection is mirrored into the right
- * pane; nothing is fetched up front, and nothing is ever written.
+ * pane; nothing is fetched up front, and nothing is ever written (T4 writeback is
+ * deliberately not adopted).
  *
  * Auth flow: `capabilities` is public, so it is read first. If the engine reports
  * `authRequired: true` and there is no token, the login screen replaces the shell;
  * a 401 from any later request (engine restart, 12h expiry) sends the user back
- * there with an "expired" explanation. Anonymous engines (`--allow-anonymous`,
- * or the older binary on 8080 today) never see a login screen.
+ * there with an "expired" explanation. Anonymous engines (`--allow-anonymous`)
+ * never see a login screen. The bearer token stays in memory/sessionStorage, never
+ * localStorage/URL/logs (PROTOCOL §1.4, DECISIONS D1).
  */
 export default function App() {
   const [capabilities, setCapabilities] = useState<LoadState<Capabilities>>({ status: 'loading' });
   const [source, setSource] = useState<LoadState<TreeSource>>({ status: 'loading' });
   const [authView, setAuthView] = useState<AuthView>({ status: 'checking' });
+  const [versionBlocked, setVersionBlocked] = useState<{ reported: number; supported: number } | null>(
+    null,
+  );
   const [session, setSession] = useState<SessionInfo | null>(() => getSession());
   const [tab, setTab] = useState<TabId>('details');
   const [selection, setSelection] = useState<Selection>({ kind: 'empty' });
@@ -78,14 +89,29 @@ export default function App() {
   }, []);
 
   /**
-   * Read capabilities (public) and decide between login and data. If a stored
-   * token is rejected, retry anonymously to distinguish "session expired" from
-   * "this engine never needed auth" (a stale token against `-Anonymous` must not
-   * strand the user on a login screen that can never succeed).
+   * Store the capability report and enforce the contract pin. A v-mismatched
+   * engine gets a blocking state and no data requests at all (PROTOCOL §0.3/§12).
+   */
+  const acceptCapabilities = useCallback((caps: Capabilities): boolean => {
+    setCapabilities({ status: 'ready', data: caps });
+    if (!isSupportedProtocolVersion(caps.protocolVersion)) {
+      setVersionBlocked({ reported: caps.protocolVersion, supported: SUPPORTED_PROTOCOL_VERSION });
+      return false;
+    }
+    setVersionBlocked(null);
+    return true;
+  }, []);
+
+  /**
+   * Read capabilities (public) and decide between blocking, login and data. If a
+   * stored token is rejected, retry anonymously to distinguish "session expired"
+   * from "this engine never needed auth" (a stale token against `-Anonymous` must
+   * not strand the user on a login screen that can never succeed).
    */
   const bootstrap = useCallback(async () => {
     setAuthView({ status: 'checking' });
     setCapabilities({ status: 'loading' });
+    setVersionBlocked(null);
     setSession(getSession());
 
     const offline = (error: unknown) => {
@@ -95,7 +121,10 @@ export default function App() {
 
     try {
       const caps = await engineApi.capabilities({ suppressUnauthorized: true });
-      setCapabilities({ status: 'ready', data: caps });
+      if (!acceptCapabilities(caps)) {
+        setAuthView({ status: 'checking' });
+        return;
+      }
       if (caps.authRequired === true && !hasToken()) {
         setAuthView({ status: 'login', reason: 'required' });
         return;
@@ -115,7 +144,10 @@ export default function App() {
       }
       try {
         const caps = await engineApi.capabilities({ suppressUnauthorized: true });
-        setCapabilities({ status: 'ready', data: caps });
+        if (!acceptCapabilities(caps)) {
+          setAuthView({ status: 'checking' });
+          return;
+        }
         if (caps.authRequired === true) {
           setAuthView({ status: 'login', reason: hadToken ? 'expired' : 'required' });
           return;
@@ -130,7 +162,7 @@ export default function App() {
         offline(retryError);
       }
     }
-  }, [loadTree]);
+  }, [acceptCapabilities, loadTree]);
 
   useEffect(() => {
     restoreSession();
@@ -171,14 +203,18 @@ export default function App() {
       setAuth(result.token, nextSession);
       setSession(nextSession);
       try {
-        setCapabilities({ status: 'ready', data: await engineApi.capabilities({ suppressUnauthorized: true }) });
+        const caps = await engineApi.capabilities({ suppressUnauthorized: true });
+        if (!acceptCapabilities(caps)) {
+          setAuthView({ status: 'checking' });
+          return;
+        }
       } catch (error) {
         setCapabilities({ status: 'error', error });
       }
       setAuthView({ status: 'active' });
       await loadTree();
     },
-    [loadTree],
+    [acceptCapabilities, loadTree],
   );
 
   const logout = useCallback(() => {
@@ -218,7 +254,7 @@ export default function App() {
 
   const selectMember = useCallback(
     (dimension: string, hierarchy: string, path: string[], node: MemberNode) => {
-      setSelectedId(`member:${hierarchy}:${path.join('/')}`);
+      setSelectedId(memberNodeId(hierarchy, path));
       setSelection({
         kind: 'member',
         dimension,
@@ -255,7 +291,7 @@ export default function App() {
     nodes.map((node) => {
       const path = [...prefix, node.name];
       return {
-        id: `member:${hierarchy}:${path.join('/')}`,
+        id: memberNodeId(hierarchy, path),
         label: node.name,
         kind: 'member',
         glyph: node.children.length > 0 ? '⊕' : '·',
@@ -383,10 +419,10 @@ export default function App() {
           </span>
           {capabilities.status === 'ready' && (
             <span className="header-meta">
-              protocol v{capabilities.data.protocolVersion} · max {formatCount(capabilities.data.maxRows)} rows
+              engine protocol v{capabilities.data.protocolVersion} · client contract v{SUPPORTED_PROTOCOL_VERSION} ·
+              max {formatCount(capabilities.data.maxRows)} rows
             </span>
-          )}
-          {capabilities.status === 'ready' && capabilities.data.authRequired === false && (
+          )}          {capabilities.status === 'ready' && capabilities.data.authRequired === false && (
             <span className="header-auth" title="Engine started with --allow-anonymous: no token required.">
               anonymous
             </span>
@@ -421,15 +457,20 @@ export default function App() {
         </div>
       </header>
 
-      {authView.status === 'active' && firstError !== null && (
+      {versionBlocked !== null && (
+        <UnsupportedVersion
+          reported={versionBlocked.reported}
+          supported={versionBlocked.supported}
+          onRetry={refresh}
+        />
+      )}
+
+      {versionBlocked === null && authView.status === 'active' && firstError !== null && (
         <div className="banner banner-error" role="alert">
           <div className="banner-text">
             <strong>Engine unreachable.</strong> {errorText(firstError)}
             {errorCode(firstError) !== null && <code>{errorCode(firstError)}</code>}
-            <span>
-              {' '}
-              Start it in your own terminal with <code>start-engine.cmd</code> (port 8080), then retry.
-            </span>
+            <span> Start the engine in its own terminal, then retry.</span>
           </div>
           <button type="button" className="btn" onClick={refresh}>
             Retry
@@ -437,17 +478,17 @@ export default function App() {
         </div>
       )}
 
-      {authView.status === 'checking' && (
+      {versionBlocked === null && authView.status === 'checking' && (
         <div className="main-message" data-testid="connecting">
           <p className="muted">Connecting to {engineLabel()}…</p>
         </div>
       )}
 
-      {authView.status === 'login' && (
+      {versionBlocked === null && authView.status === 'login' && (
         <LoginScreen engineLabel={engineLabel()} reason={authView.reason} onSubmit={login} />
       )}
 
-      {authView.status === 'active' && (
+      {versionBlocked === null && authView.status === 'active' && (
         <main className="app-main">
         <aside className="tree-pane">
           <div className="pane-heading">
@@ -492,6 +533,9 @@ export default function App() {
                 onSelectHierarchy={selectHierarchy}
                 onShowPreview={() => setTab('preview')}
                 onRetry={refresh}
+                supportsInlineDomain={
+                  capabilities.status === 'ready' && capabilities.data.supportsInlineDomain === true
+                }
               />
             )}
             {tab === 'preview' && (
@@ -505,11 +549,45 @@ export default function App() {
 
       <footer className="app-footer">
         <span>
-          Read-only HTTP client · discovery via <code>#Columns</code> <code>#Dimensions</code>{' '}
-          <code>#Hierarchies</code> <code>#Members</code> <code>#Edges</code>
+          Read-only HTTP client · contract v{SUPPORTED_PROTOCOL_VERSION} · discovery via{' '}
+          <code>#Columns</code> <code>#Dimensions</code> <code>#Hierarchies</code>{' '}
+          <code>#Members</code> <code>#Edges</code>
         </span>
-        <span>No write API is called.</span>
+        <span>Read-only by design — T4 writeback not adopted.</span>
       </footer>
+    </div>
+  );
+}
+
+/**
+ * Blocking state for a contract-version mismatch (PROTOCOL §0.3/§12). No data
+ * request is made: a v2 engine could change field meanings, so "try anyway" is
+ * exactly the silent-wrong-answer failure mode the contract forbids.
+ */
+function UnsupportedVersion({
+  reported,
+  supported,
+  onRetry,
+}: {
+  reported: number;
+  supported: number;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="main-message" data-testid="version-blocked">
+      <div className="version-card">
+        <h2>Unsupported contract version</h2>
+        <p>
+          This explorer pins <strong>contract v{supported}</strong> (protocolVersion {supported}). The
+          engine reports <strong>protocolVersion {reported}</strong>, so no data was requested.
+        </p>
+        <p className="muted">
+          Update the client, or point <code>?engine=</code> at a v{supported} engine, then retry.
+        </p>
+        <button type="button" className="btn btn-primary" onClick={onRetry}>
+          Retry
+        </button>
+      </div>
     </div>
   );
 }
@@ -539,8 +617,16 @@ function TabButton({
   );
 }
 
-function describeSelection(selection: Selection): string {
-  switch (selection.kind) {
+/**
+ * Stable node id for a member. Case-folded because member identity in the engine
+ * is case-insensitive and a saved database can return different casing from
+ * different endpoints; the visible label still shows the returned casing.
+ */
+function memberNodeId(hierarchy: string, path: string[]): string {
+  return `member:${hierarchy.toLowerCase()}:${path.map((name) => name.toLowerCase()).join('/')}`;
+}
+
+function describeSelection(selection: Selection): string {  switch (selection.kind) {
     case 'empty':
       return 'nothing selected';
     case 'loading':

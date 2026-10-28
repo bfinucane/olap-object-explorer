@@ -76,49 +76,71 @@ export function sortMemberNames(names: string[]): string[] {
  *   current path is emitted without children.
  * - Empty input returns an empty forest, so an empty/fresh database renders
  *   "no members" instead of throwing.
+ * - Member identity is matched **case-insensitively**: the engine's member
+ *   dictionary is case-insensitive, and a saved database can return the same
+ *   member with different casing from `#Members` (display casing) and `#Edges`
+ *   (parent references). Exact matching would tear that hierarchy into orphans.
+ *   Displayed names prefer the `#Members` spelling, then the first edge spelling
+ *   seen; `#Members` is the structural source, so its casing wins for labels.
  */
 export function buildMemberForest(members: string[], edges: EdgeRow[]): MemberNode[] {
-  const edgesByParent = new Map<string, EdgeRow[]>();
-  const children = new Set<string>();
-  const known = new Set<string>(members);
+  /** key (lowercase identity) -> display name */
+  const displayByKey = new Map<string, string>();
 
+  const register = (name: string): string => {
+    const key = name.toLowerCase();
+    if (!displayByKey.has(key)) displayByKey.set(key, name);
+    return key;
+  };
+
+  for (const name of members) {
+    if (String(name) !== '') register(String(name));
+  }
+
+  const normalized: { memberKey: string; parentKey: string; weight: number }[] = [];
   for (const edge of edges) {
     const member = String(edge.member);
     const parent = String(edge.parent);
     if (member === '' || parent === '') continue;
-
-    known.add(member);
-    known.add(parent);
-    children.add(member);
-
-    const bucket = edgesByParent.get(parent);
-    if (bucket) bucket.push({ ...edge, member, parent });
-    else edgesByParent.set(parent, [{ ...edge, member, parent }]);
+    const weight = Number.isFinite(edge.weight) ? edge.weight : 1;
+    normalized.push({ memberKey: register(member), parentKey: register(parent), weight });
   }
 
-  const rootNames = [...known].filter((name) => !children.has(name)).sort(compareMemberNames);
+  const edgesByParent = new Map<string, { memberKey: string; weight: number }[]>();
+  const childKeys = new Set<string>();
+  for (const edge of normalized) {
+    childKeys.add(edge.memberKey);
+    const bucket = edgesByParent.get(edge.parentKey);
+    if (bucket) bucket.push(edge);
+    else edgesByParent.set(edge.parentKey, [edge]);
+  }
 
-  const build = (name: string, weight: number | null, path: ReadonlySet<string>): MemberNode => {
-    const node: MemberNode = { name, weight, children: [] };
-    if (path.has(name)) return node;
+  const display = (key: string): string => displayByKey.get(key) ?? key;
+  const compareKeys = (a: string, b: string): number => compareMemberNames(display(a), display(b));
+
+  const rootKeys = [...displayByKey.keys()].filter((key) => !childKeys.has(key)).sort(compareKeys);
+
+  const build = (key: string, weight: number | null, path: ReadonlySet<string>): MemberNode => {
+    const node: MemberNode = { name: display(key), weight, children: [] };
+    if (path.has(key)) return node;
 
     const nextPath = new Set(path);
-    nextPath.add(name);
+    nextPath.add(key);
 
     const seen = new Set<string>();
-    const edgesForParent = [...(edgesByParent.get(name) ?? [])].sort((a, b) =>
-      compareMemberNames(a.member, b.member),
+    const edgesForParent = [...(edgesByParent.get(key) ?? [])].sort((a, b) =>
+      compareKeys(a.memberKey, b.memberKey),
     );
     for (const edge of edgesForParent) {
-      if (seen.has(edge.member)) continue;
-      seen.add(edge.member);
-      node.children.push(build(edge.member, edge.weight, nextPath));
+      if (seen.has(edge.memberKey)) continue;
+      seen.add(edge.memberKey);
+      node.children.push(build(edge.memberKey, edge.weight, nextPath));
     }
 
     return node;
   };
 
-  return rootNames.map((name) => build(name, null, new Set<string>()));
+  return rootKeys.map((key) => build(key, null, new Set<string>()));
 }
 
 /** Depth-first count of nodes; handy for tests and summaries. */

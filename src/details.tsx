@@ -19,12 +19,15 @@ export interface DetailsPaneProps {
   onSelectHierarchy: (dimension: string, hierarchy: string) => void;
   onShowPreview: () => void;
   onRetry: () => void;
+  /** Gate for `domainFor`: when false the client MUST NOT send it (PROTOCOL §5.6). */
+  supportsInlineDomain: boolean;
 }
 
 /**
  * The SSMS-style properties pane. Every branch is driven by data the engine
- * actually returned: no field is invented and no write affordance exists,
- * because the engine has no write API (handoff §5.9).
+ * actually returned: no field is invented. The client adopts tiers T0–T3 and is
+ * read-only by design, so no write affordance exists even though the engine now
+ * supports writeback (PROTOCOL §7/§8, T4 deliberately not adopted).
  */
 export function DetailsPane(props: DetailsPaneProps) {
   const { selection } = props;
@@ -56,6 +59,7 @@ export function DetailsPane(props: DetailsPaneProps) {
           dataset={selection.dataset}
           column={selection.column}
           onSelectCube={props.onSelectCube}
+          supportsInlineDomain={props.supportsInlineDomain}
         />
       );
     case 'dimension':
@@ -114,8 +118,8 @@ function CubeDetails({ dataset, onSelectColumn, onShowPreview }: CubeDetailsProp
 
       {dataset.isSystem && (
         <p className="hint">
-          One of the engine&apos;s six self-describing system cubes. Read-only; it lists every row
-          unless filtered.
+          An engine-maintained system cube (<code>#</code> prefix, PROTOCOL §10.3). Read-only; it
+          lists every row unless filtered.
         </p>
       )}
 
@@ -208,9 +212,10 @@ interface ColumnDetailsProps {
   dataset: DatasetDescription;
   column: ColumnDescription;
   onSelectCube: (name: string) => void;
+  supportsInlineDomain: boolean;
 }
 
-function ColumnDetails({ dataset, column, onSelectCube }: ColumnDetailsProps) {
+function ColumnDetails({ dataset, column, onSelectCube, supportsInlineDomain }: ColumnDetailsProps) {
   return (
     <div className="details">
       <nav className="crumb">
@@ -258,6 +263,72 @@ function ColumnDetails({ dataset, column, onSelectCube }: ColumnDetailsProps) {
           <dd>{formatRange(column.min, column.max)}</dd>
         </div>
       </dl>
+
+      {column.suggestedKind !== 'measure' && supportsInlineDomain && (
+        <DomainValues dataset={dataset.dataset} field={column.name} />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Full member list for a dimension column, fetched with the pure-domain query
+ * form (PROTOCOL §5.6) and rendered in the engine's display order. This is the
+ * contract-sanctioned picker-value source: it is not limited to sampled rows and
+ * cannot suffer the grouped-no-measures duplication of §11.8.
+ */
+function DomainValues({ dataset, field }: { dataset: string; field: string }) {
+  const [state, setState] = useState<
+    { status: 'loading' } | { status: 'ready'; values: string[] } | { status: 'error'; error: unknown }
+  >({ status: 'loading' });
+
+  useEffect(() => {
+    let alive = true;
+    setState({ status: 'loading' });
+    discovery.domain(dataset, field).then(
+      (values) => {
+        if (alive) setState({ status: 'ready', values });
+      },
+      (error: unknown) => {
+        if (alive) setState({ status: 'error', error });
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [dataset, field]);
+
+  const DISPLAY_CAP = 200;
+
+  return (
+    <div className="domain-section" data-testid="domain-values">
+      <h3>
+        Domain{' '}
+        {state.status === 'ready' && <span className="count">{formatCount(state.values.length)} members</span>}
+      </h3>
+
+      {state.status === 'loading' && <p className="muted">Loading member list…</p>}
+      {state.status === 'error' && <ErrorNotice error={state.error} title="Could not load the domain" />}
+      {state.status === 'ready' && state.values.length === 0 && (
+        <p className="muted">The engine returned an empty member list.</p>
+      )}
+      {state.status === 'ready' && state.values.length > 0 && (
+        <div className="chip-row domain-chip-row">
+          {state.values.slice(0, DISPLAY_CAP).map((value) => (
+            <span key={value} className="chip chip-domain">
+              {value}
+            </span>
+          ))}
+          {state.values.length > DISPLAY_CAP && (
+            <span className="muted">…and {formatCount(state.values.length - DISPLAY_CAP)} more</span>
+          )}
+        </div>
+      )}
+
+      <p className="hint">
+        Full member list in engine display order, fetched with <code>domainFor</code> (PROTOCOL
+        §5.6). Dimension access may hide members; an empty list means the caller may see none.
+      </p>
     </div>
   );
 }
