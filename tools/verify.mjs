@@ -973,6 +973,99 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
       return 'path + weight rendered';
     });
 
+    await checkAsync('sql console: the starter statement follows the selected cube', async () => {
+      await page.click('[data-testid="tab-sql"]');
+      await page.waitFor(
+        `document.querySelector('[data-testid="sql-input"]')?.value.includes('FROM Sales') === true`,
+        'generated statement',
+      );
+      const statement = await page.evaluate(
+        `document.querySelector('[data-testid="sql-input"]').value`,
+      );
+      assert.ok(statement.startsWith('SELECT '), `not a SELECT: ${statement}`);
+      for (const name of ['Region', 'Segment', 'Category', 'value']) {
+        assert.ok(statement.includes(name), `starter statement missing ${name}: ${statement}`);
+      }
+      assert.ok(statement.endsWith('LIMIT 50'), `starter statement has no LIMIT: ${statement}`);
+      assert.ok(!statement.includes('2025-'), 'starter statement looks hard-coded, not generated');
+      return `${statement.length} chars, generated from describe`;
+    });
+
+    await checkAsync('sql console: templates menu replaces the statement with a runnable query', async () => {
+      await page.click('[data-testid="sql-template-menu"]');
+      await page.waitFor(
+        `document.querySelector('[data-testid="sql-template-totals"]') !== null`,
+        'template menu',
+      );
+      await page.click('[data-testid="sql-template-totals"]');
+      const totals = await page.evaluate(
+        `document.querySelector('[data-testid="sql-input"]').value`,
+      );
+      assert.equal(totals, 'SELECT value FROM Sales LIMIT 10');
+      await page.click('.sql-actions .btn-primary');
+      await page.waitFor(
+        `document.querySelector('.sql-status')?.textContent?.match(/ms|failed/) !== null`,
+        'template query finished',
+      );
+      const output = await page.text('[data-testid="sql-output"]');
+      assert.ok(
+        output.trim() !== 'Run a query to see the engine output.',
+        'template query left the output placeholder in place',
+      );
+      await page.click('[data-testid="sql-reset"]');
+      return 'totals template ran';
+    });
+
+    await checkAsync('sql console: "By <dimension>" uses the tree selection', async () => {
+      // The tree collapsed Sales when it was reselected for the preview; expand it
+      // again so its columns are present as a selection source.
+      const hasRegionRow = await page.evaluate(
+        `document.querySelector('[data-node-id="column:Sales:Region"]') !== null`,
+      );
+      if (!hasRegionRow) await page.click('[data-node-id="cube:Sales"] .tree-chevron');
+      await page.waitFor(
+        `document.querySelector('[data-node-id="column:Sales:Region"]') !== null`,
+        'Sales columns expanded',
+      );
+      await page.click('[data-node-id="column:Sales:Region"]');
+      await page.click('[data-testid="tab-sql"]');
+      await page.click('[data-testid="sql-template-menu"]');
+      await page.waitFor(
+        `document.querySelector('[data-testid="sql-template-by-dimension"]')?.disabled === false`,
+        'by-dimension entry enabled',
+      );
+      await page.click('[data-testid="sql-template-by-dimension"]');
+      const statement = await page.evaluate(
+        `document.querySelector('[data-testid="sql-input"]').value`,
+      );
+      assert.equal(statement, 'SELECT Region, value FROM Sales LIMIT 100');
+      return 'SELECT Region, value FROM Sales LIMIT 100';
+    });
+
+    await checkAsync('sql console: dragging a tree name inserts it at the caret', async () => {
+      await setTextareaValue(page, '.sql-input', 'SELECT Region, value FROM Sales LIMIT 100');
+      await page.evaluate(`(() => {
+        const dt = new DataTransfer();
+        const row = document.querySelector('[data-node-id="column:Sales:Segment"]');
+        if (row === null) throw new Error('Segment tree row missing');
+        row.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+        const ta = document.querySelector('[data-testid="sql-input"]');
+        ta.focus();
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+        ta.dispatchEvent(new DragEvent('dragover', { bubbles: true, dataTransfer: dt }));
+        ta.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: dt }));
+      })()`);
+      await page.waitFor(
+        `document.querySelector('[data-testid="sql-input"]')?.value.trim().endsWith('Segment') === true`,
+        'dropped name inserted',
+      );
+      const statement = await page.evaluate(
+        `document.querySelector('[data-testid="sql-input"]').value`,
+      );
+      assert.ok(statement.length > 'SELECT Region, value FROM Sales LIMIT 100'.length);
+      return 'Segment appended as a token';
+    });
+
     await checkAsync('sql console: query runs and returns the engine text table', async () => {
       await page.click('[data-testid="tab-sql"]');
       await setTextareaValue(page, '.sql-input', 'SELECT Region, value FROM Sales');

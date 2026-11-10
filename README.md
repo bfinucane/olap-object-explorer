@@ -19,22 +19,27 @@ deliberately does not adopt T4 writeback (the engine *does* support writes — s
 
 ## Requirements
 
-- **Node.js 20+** (the Windows `start.cmd` helper also finds the Node bundled with the
-  DeepSeek Harness if `node` is not on PATH).
+- **Node.js 20+**, with a build matching the native packages in `node_modules`. On
+  Windows-on-ARM that is easy to get wrong: an arm64 Node cannot load an x64 `rollup`/`esbuild`
+  build (the symptom is `Cannot find module @rollup/rollup-win32-arm64-msvc`). `start.cmd`
+  checks each candidate's architecture against `node_modules` and picks a compatible one,
+  including the runtime bundled with DeepSeek Harness. `start.cmd -Check` prints the choice
+  without starting a server; `OLAP_EXPLORER_NODE` forces a specific `node.exe`.
 - **A running Patricia OLAP engine.** It is *not* part of this repository. Start it yourself,
   in its own terminal, and leave it open. `OLAP_ENGINE_URL` overrides the default
   `http://127.0.0.1:8080`.
-- **Dependencies**: `pnpm install` (needs network the first time). `node_modules/` and the
-  built `dist/` are local artifacts and are git-ignored.
+- **Dependencies**: `npm install` or `pnpm install` (needs network the first time; use the same
+  Node afterwards). `node_modules/` and the built `dist/` are local artifacts and are
+  git-ignored.
 
 ## Quick start
 
 ```powershell
-pnpm install
-pnpm run build
-pnpm run preview      # serves the built UI on http://127.0.0.1:5182
-# or: pnpm run dev    # Vite dev server with live reload
-# Windows convenience: start.cmd  (or start.cmd -Dev) — same thing, opens the browser
+npm install            # or pnpm install
+npm run build          # or pnpm run build
+npm run preview        # serves the built UI on http://127.0.0.1:5182
+# or: npm run dev      # Vite dev server with live reload
+# Windows convenience: start.cmd  (or start.cmd -Dev / start.cmd -Check)
 ```
 
 The engine's CORS is off by default (PROTOCOL §0.4), so the Vite dev/preview server proxies
@@ -68,8 +73,8 @@ pin lives in this README and in one code comment (`src/types.ts`).
 | Pinned contract | **v1** == `protocolVersion 1` |
 | Tiers claimed | **T0–T3** — T2 met under contract DECISIONS **D1** / PROTOCOL §1.4 (browser `sessionStorage` token) |
 | T4 writeback | **not adopted by design** — the engine supports `POST /v1/{dataset}/write` and `POST /v1/save` (`capabilities.supportsWrite: true`); this product does not write |
-| Verified against | engine **HEAD `33ae673`** (contract v1; wire pin `d6b02e0`), 2026-10-28 — later engine commits are additive/fix-only within v1 |
-| Evidence | `pnpm run typecheck` exit 0; `pnpm run verify` **54/54 checks, exit 0** (see [Verification](#verification)) |
+| Verified against | engine release `36afe88` (pinned by `12bfef1`), model **v2.2 on catalogue format v3**, contract v1 — 2026-11-10; the pinned wire text remains `d6b02e0` |
+| Evidence | `tsc --noEmit` exit 0; suite **58/58 checks, exit 0** (see [Verification](#verification)); live-model SQL-console smoke 4/4 |
 
 The client validates `capabilities.protocolVersion` before any data request and shows a
 blocking **"Unsupported contract version"** state on a mismatch (PROTOCOL §0.3/§12): a v2
@@ -116,10 +121,16 @@ weights of `0.5` are preserved and unit-tested. Cycles and self-edges cannot han
   measure `value` column is not part of it (PROTOCOL §4), and the pane says so — use the SQL
   console or the query API for measures.
 - **SQL console** — `POST /v1/sql` passthrough rendered as the engine's formatted text
-  table; Ctrl+Enter runs. The contract classes this as engine tooling, not a data path
-  (PROTOCOL §0.5), and two known engine gaps are stated in the pane (§11.6 `GROUP`/`HAVING`
-  parsed-but-unread, §11.7 `COUNT` over text): unnamed dimensions also default to their first
-  member on this path, so name every dimension you care about.
+  table; Ctrl+Enter runs. The console **follows the tree selection** (cube/column, or the last
+  cube selected while a dimension/member is active) and generates its starter statement from
+  that cube's `describe`, so it never offers a dataset that no longer exists. A **Templates**
+  menu offers a row sample (every dimension + every measure, no implicit aggregation),
+  *By &lt;selected dimension&gt;*, and whole-cube totals. **Drag a name** from the tree (or a
+  column row in Details) into the statement to insert it at the caret. Contract-wise this is
+  engine tooling, not a data path (PROTOCOL §0.5); the pane states the remaining gaps (§11.6
+  `GROUP BY`/`HAVING` parsed-but-unread, §11.7 `COUNT` over text, §11.8 no-measure duplication).
+  Omitted dimensions **aggregate across all members** — there is no implicit first-member
+  default (contract D22; engine `0e4214d`).
 
 ![Preview grid](docs/screenshots/02-sales-preview.png)
 ![Domain values for a dimension column](docs/screenshots/09-domain-values.png)
@@ -187,7 +198,7 @@ when no engine answers at `OLAP_ENGINE_URL`, an auth-enabled one (8097) for the 
 and a tiny `protocolVersion: 2` stub (8098) for the version guard. It leaves nothing running.
 
 ```powershell
-pnpm run verify
+npm run verify        # or pnpm run verify
 ```
 
 Environment overrides (all optional; workspace defaults shown):
@@ -203,7 +214,11 @@ Environment overrides (all optional; workspace defaults shown):
 When no engine binary/reference database is available, phases 3–5 report a skip and phases
 1–2 still run, so a plain clone gets build + unit coverage.
 
-Five phases, **54 checks, all green** (2026-10-28, engine HEAD `33ae673`):
+Five phases, **58 checks, all green** (2026-11-10; suite run against the archived v1 demo
+fixture with engine `33ae673`, live-model SQL smoke against model v2.2 / format v3). The
+fixture keeps the numeric fixtures stable; the SQL-console behaviour is model-independent and
+was also smoke-tested against the live `Orders` model (default statement, totals, by-dimension,
+drag/drop).
 
 1. `tsc --noEmit` and a production `vite build`.
 2. Unit tests for the member fold: empty input, flat hierarchies, nesting, "All" ordering,
@@ -217,9 +232,12 @@ Five phases, **54 checks, all green** (2026-10-28, engine HEAD `33ae673`):
 4. Headless-Chrome walkthrough of the anonymous engine: no login form, select `Sales`, expand
    columns, open a dimension column's **Domain**, expand `#Columns`, read preview rows, expand
    `Product → Product_Class → All → Furniture → Bookcases` (case-insensitive assertions,
-   weight `×1`, member details), run SQL, confirm a clean console, assert the offline banner
-   for an unreachable engine, and assert a **protocolVersion 2 stub** is blocked before any
-   data request (only `/v1/capabilities` is hit).
+   weight `×1`, member details), then the SQL console: the generated starter statement follows
+   the selected cube, the **Templates** menu replaces it with a runnable totals query,
+   *By &lt;dimension&gt;* uses the tree selection, and a simulated drag inserts a tree name at the
+   caret; confirm a clean console, assert the offline banner for an unreachable engine, and
+   assert a **protocolVersion 2 stub** is blocked before any data request (only
+   `/v1/capabilities` is hit).
 5. Authentication against a real engine with auth enabled on a **copy** of `database.bin`:
    public capabilities with `authRequired: true`, 401s without a token, wrong-password 401,
    login token/roles, authenticated discovery, clearing the token 401s; in the browser the
@@ -241,6 +259,7 @@ Screenshots: `01`–`05` anonymous walkthrough, `06`–`08` auth phase, `09-doma
 | A fresh/empty database renders (0 rows, no crash) | unit test for empty input; empty-state branches |
 | No 404s on system-cube paths | `%23Members` query + describe of `#Columns` |
 | Contract pin + `protocolVersion` validation | pinned-v1 unit check + v2 stub UI guard |
+| SQL console follows the selected cube | starter-statement check + template/`By …`/drag checks |
 | `domainFor` exercised (T1 clause) | data checks + Domain pane + unknown-field error |
 | T2 auth under D1 | token is memory/`sessionStorage`; auth phase above |
 | Read-only by design (T4 not adopted) | only GET + `query`/`sql` POSTs are issued |
@@ -281,9 +300,12 @@ own the fixes. Contract section numbers refer to `contract/PROTOCOL.md` (§11 = 
    `19` edges, `All` root) — correct in the reference database; both render correctly.
 7. **CORS is off by default** (§0.4) and the proxy route works; the client also supports a
    CORS-enabled direct `?engine=` mode.
-8. **SQL tooling gaps are real** — default-member injection plus §11.6 (`GROUP BY`/`HAVING`
-   parsed-but-unread) and §11.7 (`COUNT` over text returns the last text). The console states
-   both gaps in the UI; the tree/details never depend on the SQL surface (§0.5).
+8. **SQL tooling gaps are real** — §11.6 (`GROUP BY`/`HAVING` parsed-but-unread), §11.7
+   (`COUNT` over text returns the last text) and §11.8 (no-measure duplication). The
+   **first-member default** this client originally reported is gone: engine `0e4214d` made an
+   omitted dimension aggregate over all members unless the model sets an explicit default
+   (contract D22). The console states the remaining gaps; the tree/details never depend on the
+   SQL surface (§0.5).
 9. **`Account` is a deliberately “mixed” dimension — and its seed import silently loses
    relations.** `examples/Plateau/seed.sql` §7 calls CostCentre's `Account` dimension “the
    mixed Total tree … its members span what are, elsewhere, two different dimensions”, so the
@@ -306,7 +328,7 @@ own the fixes. Contract section numbers refer to `contract/PROTOCOL.md` (§11 = 
 - **Measure-aware preview — not needed (decided).** The Preview keeps showing raw `/sample`
   rows. Showing measure values without the aggregation context they belong to is noise in an
   object browser, and the contract keeps T4/measure-grid work out of the required surface.
-  The SQL console remains the path when you need numbers.
+  The SQL console is for ad-hoc questions; the query API remains the contract-grade data path.
 - **Ownership — stays standalone (decided).** If it ever folds into Plateau, `src/data.ts` is
   the boundary to lift; nothing is being built for that now.
 - **Anything else for v1.1?** Candidates: tree filter/search, remembering expansion across
@@ -348,7 +370,17 @@ own the fixes. Contract section numbers refer to `contract/PROTOCOL.md` (§11 = 
   pnpm store, so `package.json` has no lockfile here. `pnpm-workspace.yaml` records the two
   pnpm 11 settings needed on Windows — `nodeLinker: hoisted` (pnpm's junction links otherwise
   break Node resolution) and `allowBuilds: esbuild: true` — and `.npmrc` repeats the linker
-  note for older pnpm. On a fresh clone: `pnpm install` (network) then `pnpm run build`.
+  note for older pnpm. On a fresh clone: `npm install` (or `pnpm install`) then
+  `npm run build`.
+- **Node architecture must match the installed native packages.** On Windows-on-ARM, a
+  freshly installed arm64 Node on `PATH` cannot load a `node_modules` tree installed under
+  x64 (or the reverse); Vite then fails inside `rollup` with
+  `Cannot find module @rollup/rollup-win32-arm64-msvc`. `start.cmd` checks candidates with
+  `node -p process.arch` against `node_modules/@rollup/rollup-win32-<arch>-msvc` and
+  `node_modules/@esbuild/win32-<arch>` (see `scripts/find-node.ps1`), falls back to a compatible
+  runtime (including the one bundled with DeepSeek Harness), and `start.cmd -Check` reports the
+  choice. `OLAP_EXPLORER_NODE` overrides it. If no compatible Node exists, reinstall
+  dependencies with the Node you intend to run: `npm install`.
 - **Verification needs looser process permissions when run inside a sandbox.** The build
   toolchain (esbuild) and the browser walkthrough spawn child processes with piped stdio,
   which a file/process sandbox can block. Nothing outside this folder (apart from reading the

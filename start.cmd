@@ -5,17 +5,26 @@ REM
 REM  USAGE
 REM      start.cmd           REM serve the built UI on http://127.0.0.1:5182
 REM      start.cmd -Dev      REM Vite dev server instead (live reload)
+REM      start.cmd -Check    REM print the Node selection and exit (no server)
 REM
 REM  PREREQUISITES
 REM      1. The engine, started in ITS OWN terminal and left open:
 REM             ..\start-engine.cmd
 REM         (add -Anonymous if the engine build requires authentication)
-REM      2. A built UI:  pnpm run build
+REM      2. Dependencies installed, and a built UI:  npm install && npm run build
 REM         dist\ already exists in this workspace; the check below is a guard.
 REM
-REM  Node is located in this order:
-REM    1. a `node` already on your PATH
-REM    2. the Node runtime bundled with DeepSeek Harness
+REM  Node is located in this order, but only a Node whose architecture matches
+REM  the native rollup/esbuild packages in node_modules is accepted:
+REM    1. %OLAP_EXPLORER_NODE% (explicit override)
+REM    2. a `node` already on your PATH
+REM    3. common Node installations
+REM    4. the Node runtime bundled with DeepSeek Harness
+REM  This matters on Windows-on-ARM: node_modules can be installed under x64
+REM  (emulated) while a newer arm64 Node is first on PATH, or vice versa. An
+REM  architecture mismatch otherwise fails later with a confusing rollup
+REM  "Cannot find module @rollup/rollup-win32-..." error, so it is checked here.
+REM  Set OLAP_EXPLORER_NODE to force a particular node.exe.
 REM
 REM  Leave this window open: it IS the server. Ctrl+C stops it.
 REM
@@ -31,39 +40,46 @@ if not defined PORT set "PORT=5182"
 if not defined HOST set "HOST=127.0.0.1"
 
 REM --- locate Node ---------------------------------------------------------
-set "NODE_EXE="
-for /f "delims=" %%i in ('where node 2^>nul') do (
-  if not defined NODE_EXE set "NODE_EXE=%%i"
-)
-
-if not defined NODE_EXE (
-  REM Each candidate is tested on its own: a parenthesised block containing
-  REM %ProgramFiles(x86)% parses badly.
-  if not defined NODE_EXE if exist "%ProgramFiles%\nodejs\node.exe" set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
-  if not defined NODE_EXE if exist "%LOCALAPPDATA%\Programs\nodejs\node.exe" set "NODE_EXE=%LOCALAPPDATA%\Programs\nodejs\node.exe"
-  if not defined NODE_EXE if exist "C:\Program Files\nodejs\node.exe" set "NODE_EXE=C:\Program Files\nodejs\node.exe"
-)
-
-if not defined NODE_EXE (
-  REM The runtime bundled with DeepSeek Harness.
-  set "DSHROOT=%USERPROFILE%"
-  if not defined DSHROOT set "DSHROOT=%SystemDrive%\Users\%USERNAME%"
-  if exist "!DSHROOT!\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe" (
-    set "NODE_EXE=!DSHROOT!\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-  )
-)
-
-if not defined NODE_EXE (
+REM  An architecture-mismatched Node cannot load node_modules' native packages
+REM  (rollup/esbuild), so candidates are accepted only when the matching package
+REM  directories exist. See the header for the ordering.
+if not exist "node_modules\vite\bin\vite.js" (
   echo.
-  echo   ERROR: Node.js was not found.
-  echo   Install Node 20 or newer from https://nodejs.org, then run this file again.
+  echo   ERROR: dependencies are not installed in this folder.
+  echo.
+  echo   Install them with the Node you intend to use, then retry:
+  echo       npm install
+  echo   or  pnpm install
   echo.
   pause
   exit /b 1
 )
 
-echo   Using Node: %NODE_EXE%
+set "NODE_EXE="
+set "NODE_ARCH="
+
+REM  scripts\find-node.ps1 prints one node.exe whose architecture matches the
+REM  native rollup/esbuild packages in node_modules; diagnostics go to stderr.
+for /f "usebackq delims=" %%n in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\find-node.ps1"`) do set "NODE_EXE=%%n"
+
+if not defined NODE_EXE (
+  echo.
+  echo   ERROR: could not select a Node for this checkout. See the diagnostics above.
+  echo.
+  pause
+  exit /b 1
+)
+
+for /f "delims=" %%a in ('"%NODE_EXE%" -p process.arch 2^>nul') do set "NODE_ARCH=%%a"
+if not defined NODE_ARCH set "NODE_ARCH=unknown"
+
+echo   Using Node: %NODE_EXE% (win32-%NODE_ARCH%)
 "%NODE_EXE%" --version
+
+if /i "%~1"=="-Check" (
+  echo   Node selection OK. Set OLAP_EXPLORER_NODE to override.
+  exit /b 0
+)
 
 REM --- is the engine answering? -------------------------------------------
 where curl >nul 2>nul
@@ -87,8 +103,8 @@ if not exist "dist\index.html" (
   echo   ERROR: no built UI found at dist\index.html
   echo.
   echo   Build it first, in a terminal with network access for the first install:
-  echo       pnpm install
-  echo       pnpm run build
+  echo       npm install
+  echo       npm run build
   echo.
   pause
   exit /b 1
@@ -120,3 +136,4 @@ echo.
 echo   Explorer stopped.
 pause
 endlocal
+goto :eof

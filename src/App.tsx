@@ -75,8 +75,16 @@ export default function App() {
   );
   const [session, setSession] = useState<SessionInfo | null>(() => getSession());
   const [tab, setTab] = useState<TabId>('details');
+  // The SQL console mounts on first open and then stays mounted (hidden) so its
+  // statement, result and cube context survive tab switches. Mounting it eagerly
+  // would fetch a describe before the user asked for it.
+  const [sqlStarted, setSqlStarted] = useState(false);
   const [selection, setSelection] = useState<Selection>({ kind: 'empty' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Remember the last cube the user actually selected, so opening the SQL
+  // console while a global dimension/member is selected still targets that cube
+  // instead of guessing the first dataset.
+  const [lastCube, setLastCube] = useState<string | null>(null);
 
   const loadTree = useCallback(async () => {
     setSource({ status: 'loading' });
@@ -172,6 +180,16 @@ export default function App() {
   }, [bootstrap]);
 
   useEffect(() => {
+    if (tab === 'sql') setSqlStarted(true);
+  }, [tab]);
+
+  useEffect(() => {
+    if (selection.kind === 'cube' || selection.kind === 'column') {
+      setLastCube(selection.dataset.dataset);
+    }
+  }, [selection]);
+
+  useEffect(() => {
     setUnauthorizedHandler((reason) => {
       // Session died under us (engine restart or expiry): drop everything that
       // was fetched with that token and show the login screen.
@@ -189,6 +207,7 @@ export default function App() {
     resetDiscoveryCache();
     setSelection({ kind: 'empty' });
     setSelectedId(null);
+    setLastCube(null);
     void bootstrap();
   }, [bootstrap]);
 
@@ -223,6 +242,7 @@ export default function App() {
     setSession(null);
     setSelection({ kind: 'empty' });
     setSelectedId(null);
+    setLastCube(null);
     setSource({ status: 'loading' });
     setAuthView({ status: 'login', reason: 'required' });
   }, []);
@@ -395,6 +415,21 @@ export default function App() {
   const previewDataset =
     selection.kind === 'cube' || selection.kind === 'column' ? selection.dataset.dataset : null;
 
+  // SQL console context. A cube/column selection names a cube explicitly; while
+  // a global dimension/hierarchy/member is selected the last explicitly selected
+  // cube is used. The console follows these automatically and never overwrites a
+  // user's edit.
+  const explicitSqlCube =
+    selection.kind === 'cube' || selection.kind === 'column' ? selection.dataset.dataset : null;
+  const sqlCube = explicitSqlCube ?? lastCube;
+  const sqlDimension =
+    selection.kind === 'column' && selection.column.suggestedKind === 'dimension'
+      ? selection.column.name
+      : selection.kind === 'dimension'
+        ? selection.dimension.name
+        : null;
+  const datasets = source.status === 'ready' ? source.data.datasets : [];
+
   const contextLabel = describeSelection(selection);
 
   // When ?engine= overrides the proxy target, show what is actually being called.
@@ -493,7 +528,7 @@ export default function App() {
         <aside className="tree-pane">
           <div className="pane-heading">
             Explorer
-            <span className="pane-hint">click to expand · one query per level</span>
+            <span className="pane-hint">click to expand · drag names into the SQL editor</span>
           </div>
           <div className="tree-scroll">
             {source.status === 'loading' && <p className="tree-fallback">Loading datasets…</p>}
@@ -541,7 +576,17 @@ export default function App() {
             {tab === 'preview' && (
               <PreviewPane datasetName={previewDataset} onOpenDetails={() => setTab('details')} />
             )}
-            {tab === 'sql' && <SqlConsole />}
+            {/* Kept mounted after first open so the SQL text, result and cube
+                context survive tab switches; hidden rather than unmounted. */}
+            {sqlStarted && (
+              <div className="tab-fill" hidden={tab !== 'sql'} data-testid="sql-panel">
+                <SqlConsole
+                  datasets={datasets}
+                  selectedCube={sqlCube}
+                  selectedDimension={sqlDimension}
+                />
+              </div>
+            )}
           </div>
         </section>
         </main>

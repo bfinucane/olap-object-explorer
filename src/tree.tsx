@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { errorText } from './api';
+import { startNameDrag } from './drag';
 
 /** Kinds drive the glyph and colour of a tree row. */
 export type NodeKind =
@@ -106,6 +107,8 @@ function TreeItem({ node, depth, selectedId, onSelect }: TreeItemProps) {
   const indent = { paddingLeft: `${6 + depth * 14}px` };
   const glyph = node.glyph ?? DEFAULT_GLYPHS[node.kind];
   const isNote = node.kind === 'note';
+  // Names can be dragged into the SQL console; sections and notes are not names.
+  const canDrag = !isNote && node.kind !== 'section';
 
   return (
     <div className="tree-item">
@@ -116,6 +119,23 @@ function TreeItem({ node, depth, selectedId, onSelect }: TreeItemProps) {
         aria-selected={isSelected}
         aria-expanded={canExpand ? expanded : undefined}
         data-node-id={node.id}
+        draggable={canDrag}
+        title={canDrag ? 'Drag this name into the SQL statement' : undefined}
+        onDragStart={
+          canDrag
+            ? (event) => {
+                startNameDrag(event, node.label);
+                event.currentTarget.classList.add('is-dragging');
+              }
+            : undefined
+        }
+        onDragEnd={
+          canDrag
+            ? (event) => {
+                event.currentTarget.classList.remove('is-dragging');
+              }
+            : undefined
+        }
         onClick={isNote ? undefined : handleRowClick}
       >
         {canExpand ? (

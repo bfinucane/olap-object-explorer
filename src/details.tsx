@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { discovery, type DimensionInfo } from './discovery';
+import { startNameDrag } from './drag';
 import { ErrorNotice } from './errorNotice';
 import {
   formatCount,
@@ -181,7 +182,9 @@ function CubeDetails({ dataset, onSelectColumn, onShowPreview }: CubeDetailsProp
                   key={column.name}
                   className="grid-row-click"
                   data-column-name={column.name}
-                  title="Show this column's details"
+                  draggable
+                  title="Click for column details · drag the name into the SQL statement"
+                  onDragStart={(event) => startNameDrag(event, column.name)}
                   onClick={() => onSelectColumn(dataset, column)}
                 >
                   <td className="cell-name">{column.name}</td>
