@@ -27,9 +27,19 @@ export interface SqlTemplate {
   sql: string;
 }
 
-/** Dimensions a template can project: real dimension columns, not the measure axis. */
+/**
+ * Dimensions a template can project: real dimension columns, not the measure axis.
+ *
+ * The engine reports the trailing `value` cell of a **system cube** as
+ * `suggestedKind: "dimension"` (e.g. `#Dimensions` → `#Dimension`, `#Property`,
+ * `value`). `value` is the SQL measure token, so it is excluded here and added
+ * exactly once by the templates below; otherwise a system cube yields
+ * `SELECT …, value, value`.
+ */
 export function dimensionColumns(dataset: DatasetDescription): ColumnDescription[] {
-  return dataset.columns.filter((column) => column.suggestedKind === 'dimension');
+  return dataset.columns.filter(
+    (column) => column.suggestedKind === 'dimension' && column.name.toLowerCase() !== 'value',
+  );
 }
 
 export function isDimensionColumn(dataset: DatasetDescription, name: string): boolean {

@@ -74,7 +74,7 @@ pin lives in this README and in one code comment (`src/types.ts`).
 | Tiers claimed | **T0–T3** — T2 met under contract DECISIONS **D1** / PROTOCOL §1.4 (browser `sessionStorage` token) |
 | T4 writeback | **not adopted by design** — the engine supports `POST /v1/{dataset}/write` and `POST /v1/save` (`capabilities.supportsWrite: true`); this product does not write |
 | Verified against | engine release `36afe88` (pinned by `12bfef1`), model **v2.2 on catalogue format v3**, contract v1 — 2026-11-10; the pinned wire text remains `d6b02e0` |
-| Evidence | `tsc --noEmit` exit 0; suite **58/58 checks, exit 0** (see [Verification](#verification)); live-model SQL-console smoke 4/4 |
+| Evidence | `tsc --noEmit` exit 0; suite **59/59 checks, exit 0** (see [Verification](#verification)); live-model SQL-console smoke 4/4 |
 
 The client validates `capabilities.protocolVersion` before any data request and shows a
 blocking **"Unsupported contract version"** state on a mismatch (PROTOCOL §0.3/§12): a v2
@@ -214,7 +214,7 @@ Environment overrides (all optional; workspace defaults shown):
 When no engine binary/reference database is available, phases 3–5 report a skip and phases
 1–2 still run, so a plain clone gets build + unit coverage.
 
-Five phases, **58 checks, all green** (2026-11-10; suite run against the archived v1 demo
+Five phases, **59 checks, all green** (2026-11-10; suite run against the archived v1 demo
 fixture with engine `33ae673`, live-model SQL smoke against model v2.2 / format v3). The
 fixture keeps the numeric fixtures stable; the SQL-console behaviour is model-independent and
 was also smoke-tested against the live `Orders` model (default statement, totals, by-dimension,

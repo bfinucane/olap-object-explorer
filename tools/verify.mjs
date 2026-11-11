@@ -1066,6 +1066,29 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
       return 'Segment appended as a token';
     });
 
+    await checkAsync('sql console: system-cube template has one value column, not two', async () => {
+      // A system cube's trailing `value` cell is reported as a dimension, so a
+      // template that appends `value` unconditionally used to produce
+      // "SELECT #Dimension, #Property, value, value FROM #Dimensions".
+      await page.click('[data-node-id="cube:#Dimensions"]');
+      await page.click('[data-testid="tab-sql"]');
+      await page.waitFor(
+        `document.querySelector('[data-testid="sql-reset"]')?.disabled === false`,
+        'system-cube description loaded',
+      );
+      await page.click('[data-testid="sql-reset"]');
+      await page.waitFor(
+        `document.querySelector('[data-testid="sql-input"]')?.value.includes('FROM #Dimensions') === true`,
+        'system-cube statement',
+      );
+      const statement = await page.evaluate(
+        `document.querySelector('[data-testid="sql-input"]').value`,
+      );
+      assert.ok(!/value\s*,\s*value/i.test(statement), `duplicate value column: ${statement}`);
+      assert.ok(statement.includes('#Dimension'), `unexpected statement: ${statement}`);
+      return statement;
+    });
+
     await checkAsync('sql console: query runs and returns the engine text table', async () => {
       await page.click('[data-testid="tab-sql"]');
       await setTextareaValue(page, '.sql-input', 'SELECT Region, value FROM Sales');
