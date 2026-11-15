@@ -414,6 +414,7 @@ async function phaseUnit() {
   console.log('\n[2/5] Unit tests — member tree folding (pure, no engine)');
   const memberTree = await bundle('src/memberTree.ts', 'memberTree.mjs');
   const { buildMemberForest, countNodes, flattenNames, compareMemberNames, sortMemberNames } = memberTree;
+  const { parseSqlTable } = await bundle('src/sqlTable.ts', 'sqlTable.mjs');
 
   check('empty database: no members and no edges -> empty forest', () => {
     assert.deepEqual(buildMemberForest([], []), []);
@@ -541,6 +542,29 @@ async function phaseUnit() {
       ],
     );
     return 'one tree, display casing from #Members';
+  });
+
+  check('SQL text table parser: columns/rows, single column, loud fallback', () => {
+    const two = parseSqlTable(
+      'Category | Sales\r\n--------------------\r\nFurniture | 12.5\r\nTechnology | 3\r\n',
+    );
+    assert.deepEqual(two.columns, ['Category', 'Sales']);
+    assert.deepEqual(two.rows, [
+      ['Furniture', '12.5'],
+      ['Technology', '3'],
+    ]);
+
+    const one = parseSqlTable('Sales\n----------\n42\n');
+    assert.deepEqual(one.columns, ['Sales']);
+    assert.deepEqual(one.rows, [['42']]);
+
+    assert.equal(parseSqlTable('0 rows returned.'), null, 'empty result is not a table');
+    assert.equal(
+      parseSqlTable('A | B\n----\nonly one cell\n'),
+      null,
+      'ambiguous cell count must fall back to raw text',
+    );
+    return '2 tables parsed; empty/malformed fall back to raw';
   });
 }
 
@@ -1095,18 +1119,36 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
       return statement;
     });
 
-    await checkAsync('sql console: query runs and returns the engine text table', async () => {
+    await checkAsync('sql console: query renders as an HTML table with a raw toggle', async () => {
       await page.click('[data-testid="tab-sql"]');
       await setTextareaValue(page, '.sql-input', 'SELECT Region, value FROM Sales');
       await page.click('.sql-actions .btn-primary');
       await page.waitFor(
-        `document.querySelector('[data-testid="sql-output"]')?.innerText.includes('Central') === true`,
-        'SQL output',
+        `Array.from(document.querySelectorAll('[data-testid="sql-table"] thead th')).map((th) => th.textContent).join('|') === 'Region|value'`,
+        'SQL result table',
       );
+      const headers = await page.evaluate(
+        `Array.from(document.querySelectorAll('[data-testid="sql-table"] thead th')).map((th) => th.textContent)`,
+      );
+      assert.deepEqual(headers, ['Region', 'value']);
+      const rowCount = await page.count('[data-testid="sql-table"] tbody tr');
+      assert.ok(rowCount >= 4, `expected region rows, saw ${rowCount}`);
       const output = await page.text('[data-testid="sql-output"]');
       assert.ok(output.includes('East') && output.includes('South') && output.includes('West'));
+      assert.ok(/4 rows/.test(output), `row count missing from the result meta: ${output}`);
+
+      await page.click('[data-testid="sql-raw-toggle"]');
+      await page.waitFor(`document.querySelector('.sql-raw') !== null`, 'raw text view');
+      const raw = await page.text('.sql-raw');
+      assert.ok(raw.includes('Region') && raw.includes('|'), `raw text missing: ${raw}`);
+      await page.click('[data-testid="sql-raw-toggle"]');
+      await page.waitFor(
+        `document.querySelector('[data-testid="sql-table"]') !== null`,
+        'table view restored',
+      );
+
       await page.screenshot('04-sql-console.png');
-      return 'formatted text table';
+      return 'HTML table (4 rows) + raw toggle';
     });
 
     await checkAsync('no uncaught page errors during the walkthrough', () => {

@@ -4,6 +4,7 @@ import { EngineError, engineApi, errorText } from './api';
 import { discovery } from './discovery';
 import { insertName, readNameDrag } from './drag';
 import { buildRowSample, buildTemplates, type SqlTemplate } from './sqlTemplates';
+import { parseSqlTable } from './sqlTable';
 import type { DatasetDescription, SqlResponse } from './types';
 
 interface SqlConsoleProps {
@@ -29,7 +30,9 @@ function pickDefaultCube(datasets: string[]): string {
 
 /**
  * SQL console passthrough: `POST /v1/sql` returns a formatted TEXT table, not
- * rows, so the output is rendered in a <pre> exactly as sent.
+ * rows (PROTOCOL §0.5). The text is parsed into a real HTML table for display;
+ * the raw engine text remains available with the "Raw text" toggle and is the
+ * fallback whenever the format does not parse unambiguously.
  *
  * The contract (PROTOCOL §0.5) classes this as engine tooling (tier T3), not a
  * client data path: clients MUST NOT depend on it. Known engine gaps remain
@@ -56,6 +59,7 @@ export function SqlConsole({ datasets, selectedCube, selectedDimension }: SqlCon
   const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
   const [pendingCube, setPendingCube] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
 
   const appliedSql = useRef('');
   const lastSelectedCube = useRef<string | null>(selectedCube);
@@ -125,6 +129,7 @@ export function SqlConsole({ datasets, selectedCube, selectedDimension }: SqlCon
     if (running) return;
     setRunning(true);
     setError(null);
+    setShowRaw(false);
     try {
       setResult(await engineApi.sql(sql));
     } catch (runError) {
@@ -174,6 +179,7 @@ export function SqlConsole({ datasets, selectedCube, selectedDimension }: SqlCon
   const templates =
     description.status === 'ready' ? buildTemplates(description.description, selectedDimension) : null;
   const canRun = cube !== '' && description.status === 'ready';
+  const parsed = result === null ? null : parseSqlTable(result.output);
   const dimensionSelectionUsable =
     description.status === 'ready' &&
     selectedDimension !== null &&
@@ -360,9 +366,59 @@ export function SqlConsole({ datasets, selectedCube, selectedDimension }: SqlCon
       {error !== null ? (
         <pre className="sql-output is-error">{errorText(error)}</pre>
       ) : (
-        <pre className="sql-output" data-testid="sql-output">
-          {result?.output ?? 'Run a query to see the engine output.'}
-        </pre>
+        <div className="sql-result" data-testid="sql-output">
+          {result === null ? (
+            <p className="sql-placeholder">Run a query to see the engine output.</p>
+          ) : parsed === null ? (
+            <pre className="sql-raw">{result.output}</pre>
+          ) : (
+            <>
+              <div className="sql-result-meta">
+                <span>
+                  {parsed.rows.length} {parsed.rows.length === 1 ? 'row' : 'rows'} ×{' '}
+                  {parsed.columns.length} {parsed.columns.length === 1 ? 'column' : 'columns'}
+                </span>
+                <button
+                  type="button"
+                  className="linkish"
+                  data-testid="sql-raw-toggle"
+                  onClick={() => setShowRaw((raw) => !raw)}
+                >
+                  {showRaw ? 'Show table' : 'Raw text'}
+                </button>
+              </div>
+              {showRaw ? (
+                <pre className="sql-raw">{result.output}</pre>
+              ) : (
+                <div className="grid-scroll sql-table-scroll">
+                  <table className="grid sql-table" data-testid="sql-table">
+                    <thead>
+                      <tr>
+                        {parsed.columns.map((column, index) => (
+                          <th key={`${column}-${index}`}>{column}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {parsed.rows.map((row, rowIndex) => (
+                        <tr key={rowIndex}>
+                          {row.map((cell, cellIndex) => (
+                            <td
+                              key={cellIndex}
+                              className={/^-?\d+(\.\d+)?$/.test(cell.trim()) ? 'num' : undefined}
+                            >
+                              {cell}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       )}
     </div>
   );

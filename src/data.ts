@@ -35,6 +35,8 @@ export {
 export type { SessionInfo, UnauthorizedReason } from './auth';
 export type { DimensionInfo, MemberTree } from './discovery';
 export * from './memberTree';
+export { parseSqlTable } from './sqlTable';
+export type { ParsedSqlTable } from './sqlTable';
 export type {
   Capabilities,
   Cell,

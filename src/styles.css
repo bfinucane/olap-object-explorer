@@ -1206,6 +1206,103 @@ code {
   color: var(--error);
 }
 
+.sql-result {
+  flex: 1;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #f7f8fa;
+}
+
+.sql-placeholder {
+  margin: 0;
+  padding: 12px 14px;
+  color: var(--text-muted);
+  font: 12px var(--mono);
+}
+
+.sql-result-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex: none;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--text-muted);
+  font: 11px var(--mono);
+}
+
+.linkish {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: 11px var(--mono);
+  cursor: pointer;
+}
+
+.linkish:hover {
+  text-decoration: underline;
+}
+
+.sql-table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+}
+
+.sql-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sql-table th,
+.sql-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid #edf0f3;
+  text-align: left;
+  font: 11.5px var(--mono);
+  white-space: nowrap;
+}
+
+.sql-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f3f6f9;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.sql-table tbody tr:hover td {
+  background: #f7fafc;
+}
+
+.sql-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sql-raw {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  background: #f7f8fa;
+  color: #22313f;
+  font: 12px/1.6 var(--mono);
+  white-space: pre;
+}
+
 /* ------------------------------------------------------------ error notice */
 
 .error-notice {
