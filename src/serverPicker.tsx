@@ -32,6 +32,9 @@ export function ServerPicker({ defaultTarget, databaseName, onConnect }: ServerP
   const currentBase = engineBase();
   const displayed = currentBase === '' ? defaultTarget : currentBase;
   const isCustom = currentBase !== '';
+  const matchesDefault =
+    value.trim() !== '' &&
+    value.trim().replace(/\/+$/, '') === defaultTarget.replace(/\/+$/, '');
 
   useEffect(() => {
     if (open) {
@@ -111,6 +114,13 @@ export function ServerPicker({ defaultTarget, databaseName, onConnect }: ServerP
           {error !== null && (
             <p className="hint server-error" data-testid="server-error">
               {error}
+            </p>
+          )}
+          {matchesDefault && (
+            <p className="hint server-proxy-hint" data-testid="server-proxy-hint">
+              That is the URL the Vite proxy already targets. Choose <strong>Use proxy default</strong>{' '}
+              instead — a direct browser connection bypasses the proxy and needs the engine started
+              with CORS (<code>--cors</code>).
             </p>
           )}
           <p className="hint">
