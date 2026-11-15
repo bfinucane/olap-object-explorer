@@ -1,17 +1,22 @@
 # OLAP Object Explorer
 
-A standalone, **read-only** SSMS-style object browser for the **Patricia OLAP engine**
-(HTTP API at `127.0.0.1:8080` by default; the engine is a separate project).
+A standalone SSMS-style object browser for the **Patricia OLAP engine**
+(HTTP API at `127.0.0.1:8080` by default; the engine is a separate project), with an
+**optional admin modelling console** when the engine advertises it.
 
 It answers *"what is in this database, and how is it structured?"* without the user
 knowing any cube, dimension or hierarchy name in advance: cubes and their columns,
 dimensions → hierarchies → members nested through the engine's edge table with rollup
 weights, a details pane with member domains, a paged row preview, a SQL console, and — for
-engines with authentication enabled — a sign-in form.
+engines with authentication enabled — a sign-in form. Engines with `supportsCli` additionally
+get a feature-gated **Modeling** tab that drives the engine's admin CLI over HTTP.
 
-This client is **read-only by design**: it adopts the suite contract at tiers T0–T3 and
-deliberately does not adopt T4 writeback (the engine *does* support writes — see
-[Contract conformance](#contract-conformance)). Nothing in the engine tree is modified.
+The browsing/data path is **read-only by design**: it adopts the suite contract at tiers T0–T3
+and deliberately does not adopt T4 writeback (the engine *does* support writes — see
+[Contract conformance](#contract-conformance)). The Modeling tab is **experimental engine
+tooling** (PROTOCOL §0.6, DECISIONS D28), not a client conformance tier; it can run modelling,
+imports and an explicit `.save` of the server's running copy. Nothing in the engine tree is
+modified.
 
 ![Details pane for Sales](docs/screenshots/01-sales-details.png)
 
@@ -72,9 +77,10 @@ pin lives in this README and in one code comment (`src/types.ts`).
 | --- | --- |
 | Pinned contract | **v1** == `protocolVersion 1` |
 | Tiers claimed | **T0–T3** — T2 met under contract DECISIONS **D1** / PROTOCOL §1.4 (browser `sessionStorage` token) |
-| T4 writeback | **not adopted by design** — the engine supports `POST /v1/{dataset}/write` and `POST /v1/save` (`capabilities.supportsWrite: true`); this product does not write |
-| Verified against | engine release `36afe88` (pinned by `12bfef1`), model **v2.2 on catalogue format v3**, contract v1 — 2026-11-10; the pinned wire text remains `d6b02e0` |
-| Evidence | `tsc --noEmit` exit 0; suite **59/59 checks, exit 0** (see [Verification](#verification)); live-model SQL-console smoke 4/4 |
+| T4 writeback | **not adopted by design** — the engine supports `POST /v1/{dataset}/write` and `POST /v1/save` (`capabilities.supportsWrite: true`); this product's data path does not write |
+| Modeling console | **not a tier** — optional admin CLI console, feature-gated on `capabilities.supportsCli`, experimental engine tooling (PROTOCOL §0.6, D28). An engine without the capability shows no tab, and T0–T3 behavior is unchanged |
+| Verified against | engine `76355a8` for the CLI route (pre-release; not in the live 8080 pair yet), model **v2.2 on catalogue format v3**, contract v1 — 2026-11-15; base client verified against engine release `36afe88`/`12bfef1` (2026-11-10) |
+| Evidence | `tsc --noEmit` exit 0; suite **61/61 checks, exit 0** (see [Verification](#verification)); live scratch-engine CLI smoke: `.help`, `.cubes`, `.import_measures`, `.run`, `.save`, `.exit` no-op, server stays up |
 
 The client validates `capabilities.protocolVersion` before any data request and shows a
 blocking **"Unsupported contract version"** state on a mismatch (PROTOCOL §0.3/§12): a v2
@@ -131,9 +137,21 @@ weights of `0.5` are preserved and unit-tested. Cycles and self-edges cannot han
   `GROUP BY`/`HAVING` parsed-but-unread, §11.7 `COUNT` over text, §11.8 no-measure duplication).
   Omitted dimensions **aggregate across all members** — there is no implicit first-member
   default (contract D22; engine `0e4214d`).
+- **Modeling** (only when `capabilities.supportsCli` is true) — admin CLI console for engine
+  `POST /v1/cli` (PROTOCOL §0.6, D28). One command per request (≤8192 bytes, no CR/LF), output
+  pane with truncation badge, command history, and error display. The tab is **experimental
+  engine tooling, not a conformance tier**; it is gated on the capability and, for a known
+  non-admin login, on the `admin` role (the server still enforces 403). The full CLI is
+  available to admin: inspection, modelling, `.import*`, `.run`, SQL DDL/DML and an explicit
+  **Save database…** action — which warns that `.save` writes the server's **running** copy and
+  is not the frozen release. `.exit`/`.quit` are no-ops. Imports read **server-side paths**:
+  there is no upload route in the engine and none is faked here; place the file where the
+  engine can read it and pass the path to `.import…`. Older engines (including the live 8080
+  release at the time of writing) predate the route and therefore show no Modeling tab.
 
 ![Preview grid](docs/screenshots/02-sales-preview.png)
 ![Domain values for a dimension column](docs/screenshots/09-domain-values.png)
+![Modelling console](docs/screenshots/11-modeling-console.png)
 
 ## Sign in
 
@@ -214,11 +232,11 @@ Environment overrides (all optional; workspace defaults shown):
 When no engine binary/reference database is available, phases 3–5 report a skip and phases
 1–2 still run, so a plain clone gets build + unit coverage.
 
-Five phases, **59 checks, all green** (2026-11-10; suite run against the archived v1 demo
-fixture with engine `33ae673`, live-model SQL smoke against model v2.2 / format v3). The
-fixture keeps the numeric fixtures stable; the SQL-console behaviour is model-independent and
-was also smoke-tested against the live `Orders` model (default statement, totals, by-dimension,
-drag/drop).
+Five phases, **61 checks, all green** (2026-11-15; suite run against the archived v1 demo
+fixture with engine `33ae673`, live-model SQL smoke against model v2.2 / format v3, and a live
+scratch-engine CLI smoke at engine `76355a8`). The fixture keeps the numeric fixtures stable;
+the SQL-console behaviour is model-independent and was also smoke-tested against the live
+`Orders` model (default statement, totals, by-dimension, drag/drop).
 
 1. `tsc --noEmit` and a production `vite build`.
 2. Unit tests for the member fold: empty input, flat hierarchies, nesting, "All" ordering,
@@ -235,9 +253,12 @@ drag/drop).
    weight `×1`, member details), then the SQL console: the generated starter statement follows
    the selected cube, the **Templates** menu replaces it with a runnable totals query,
    *By &lt;dimension&gt;* uses the tree selection, and a simulated drag inserts a tree name at the
-   caret; confirm a clean console, assert the offline banner for an unreachable engine, and
+   caret; confirm a clean console, assert the offline banner for an unreachable engine,
    assert a **protocolVersion 2 stub** is blocked before any data request (only
-   `/v1/capabilities` is hit).
+   `/v1/capabilities` is hit), and — against a stub advertising `supportsCli` — open the
+   Modeling tab, run `.help`, display a command failure, show the truncation badge, and walk
+   the two-step save confirmation. The real-engine phase asserts the tab is **absent** when
+   `supportsCli` is missing.
 5. Authentication against a real engine with auth enabled on a **copy** of `database.bin`:
    public capabilities with `authRequired: true`, 401s without a token, wrong-password 401,
    login token/roles, authenticated discovery, clearing the token 401s; in the browser the
@@ -246,7 +267,7 @@ drag/drop).
    restart mid-session produces the "session expired" re-login.
 
 Screenshots: `01`–`05` anonymous walkthrough, `06`–`08` auth phase, `09-domain-values.png`,
-`10-unsupported-version.png`.
+`10-unsupported-version.png`, `11-modeling-console.png`.
 
 ### Acceptance criteria (engine handoff + contract adoption)
 
@@ -262,7 +283,9 @@ Screenshots: `01`–`05` anonymous walkthrough, `06`–`08` auth phase, `09-doma
 | SQL console follows the selected cube | starter-statement check + template/`By …`/drag checks |
 | `domainFor` exercised (T1 clause) | data checks + Domain pane + unknown-field error |
 | T2 auth under D1 | token is memory/`sessionStorage`; auth phase above |
-| Read-only by design (T4 not adopted) | only GET + `query`/`sql` POSTs are issued |
+| Read-only data path (T4 not adopted) | only GET + `query`/`sql` POSTs by default; the opt-in CLI console is engine tooling, not T4 |
+| Modeling tab is feature-gated and admin-only | absent on engines without `supportsCli`; role gate for a known reader login; `POST /v1/cli` server 403 remains authoritative |
+| Modeling save is explicit and warned | two-step confirmation; the warning names the running copy and the frozen release |
 
 A truly empty database was not pointed at live (that needs a separate engine instance). The
 folding is tested on empty input and the UI has explicit 0-row/empty states.
@@ -329,6 +352,12 @@ own the fixes. Contract section numbers refer to `contract/PROTOCOL.md` (§11 = 
   rows. Showing measure values without the aggregation context they belong to is noise in an
   object browser, and the contract keeps T4/measure-grid work out of the required surface.
   The SQL console is for ad-hoc questions; the query API remains the contract-grade data path.
+- **Modelling console — admin-only, experimental (decided with the user).** The user requested
+  web modelling from the first version. It is implemented as a separate, feature-gated tab that
+  drives `POST /v1/cli` (PROTOCOL §0.6, D28), **not** as a new conformance tier or a wider
+  read-only data path. The user asked for the full admin CLI (imports, `.run`, `.save`); the
+  client keeps the save warning and does not add an upload route. A typed modelling API is the
+  better long-term contract but a later contract step.
 - **Ownership — stays standalone (decided).** If it ever folds into Plateau, `src/data.ts` is
   the boundary to lift; nothing is being built for that now.
 - **Anything else for v1.1?** Candidates: tree filter/search, remembering expansion across
@@ -337,8 +366,12 @@ own the fixes. Contract section numbers refer to `contract/PROTOCOL.md` (§11 = 
 ## Deliberately not done (v1)
 
 - **T4 writeback.** The engine supports `POST /v1/{dataset}/write` and `POST /v1/save`
-  (`capabilities.supportsWrite: true`); this product is read-only by design and offers no
-  edit/save affordance.
+  (`capabilities.supportsWrite: true`); this product's data path is read-only and offers no
+  T4 affordance. The separate admin **Modeling** console can invoke the engine's own CLI
+  (including an explicit `.save` of the running copy) only when the engine advertises
+  `supportsCli` — that is engine tooling (PROTOCOL §0.6), not T4.
+- **No upload UI.** Imports need a server-readable path; the engine has no upload route and
+  this app does not add one (D28). The console hint says so.
 - No measure-aware grid in the Preview: measures without aggregation context are noise
   (decided with the user).
 - No tree filter/search; no persisted expansion/selection; no virtualisation. Structural

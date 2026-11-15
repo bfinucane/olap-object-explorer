@@ -21,6 +21,7 @@ import {
   type SessionInfo,
 } from './auth';
 import { discovery, resetDiscoveryCache, type DimensionInfo, type MemberTree } from './discovery';
+import { CliConsole } from './cli';
 import { DetailsPane } from './details';
 import { ErrorNotice } from './errorNotice';
 import { formatCount, formatWeight } from './format';
@@ -39,7 +40,7 @@ interface TreeSource {
   dimensions: DimensionInfo[];
 }
 
-type TabId = 'details' | 'preview' | 'sql';
+type TabId = 'details' | 'preview' | 'sql' | 'cli';
 
 /**
  * Whether the shell may show data: an engine with auth enabled and no token gets
@@ -56,8 +57,10 @@ type AuthView = { status: 'checking' } | { status: 'login'; reason: 'required' |
  *
  * Data flow: every tree level is loaded on first expand through `discovery` (one
  * engine query per level, promise-cached). Selection is mirrored into the right
- * pane; nothing is fetched up front, and nothing is ever written (T4 writeback is
- * deliberately not adopted).
+ * pane; nothing is fetched up front. The browsing path never writes (T4 writeback
+ * is deliberately not adopted). The optional Modeling tab (PROTOCOL §0.6, D28) is
+ * a separate, capability-gated admin CLI console; it is engine tooling, not part
+ * of the read-only data surface.
  *
  * Auth flow: `capabilities` is public, so it is read first. If the engine reports
  * `authRequired: true` and there is no token, the login screen replaces the shell;
@@ -79,6 +82,8 @@ export default function App() {
   // statement, result and cube context survive tab switches. Mounting it eagerly
   // would fetch a describe before the user asked for it.
   const [sqlStarted, setSqlStarted] = useState(false);
+  // Same lazy-mount rule for the admin modelling console (and its history).
+  const [cliStarted, setCliStarted] = useState(false);
   const [selection, setSelection] = useState<Selection>({ kind: 'empty' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Remember the last cube the user actually selected, so opening the SQL
@@ -181,7 +186,20 @@ export default function App() {
 
   useEffect(() => {
     if (tab === 'sql') setSqlStarted(true);
+    if (tab === 'cli') setCliStarted(true);
   }, [tab]);
+
+  // The CLI tab is feature-gated on supportsCli; if a capability refresh removes
+  // it, fall back to a tab that always exists.
+  useEffect(() => {
+    if (
+      tab === 'cli' &&
+      capabilities.status === 'ready' &&
+      capabilities.data.supportsCli !== true
+    ) {
+      setTab('details');
+    }
+  }, [tab, capabilities]);
 
   useEffect(() => {
     if (selection.kind === 'cube' || selection.kind === 'column') {
@@ -430,6 +448,15 @@ export default function App() {
         : null;
   const datasets = source.status === 'ready' ? source.data.datasets : [];
 
+  // Modelling console (PROTOCOL §0.6 / D28): optional capability, admin-only.
+  // `roles === null` means no login session (anonymous dev engine or ?token=);
+  // the component only blocks when a known role list lacks `admin`.
+  const cliAvailable =
+    capabilities.status === 'ready' && capabilities.data.supportsCli === true;
+  const cliRoles = session === null ? null : session.roles;
+  const cliAnonymous =
+    capabilities.status === 'ready' && capabilities.data.authRequired === false;
+
   const contextLabel = describeSelection(selection);
 
   // When ?engine= overrides the proxy target, show what is actually being called.
@@ -444,7 +471,7 @@ export default function App() {
           </span>
           <div>
             <h1>OLAP Object Explorer</h1>
-            <p className="brand-sub">Patricia engine · read-only</p>
+            <p className="brand-sub">Patricia engine · object browser</p>
           </div>
         </div>
 
@@ -551,6 +578,9 @@ export default function App() {
             <TabButton id="details" label="Details" active={tab} onSelect={setTab} />
             <TabButton id="preview" label="Preview" active={tab} onSelect={setTab} />
             <TabButton id="sql" label="SQL console" active={tab} onSelect={setTab} />
+            {cliAvailable && (
+              <TabButton id="cli" label="Modeling" active={tab} onSelect={setTab} />
+            )}
             <span className="tab-context" title={contextLabel}>
               {contextLabel}
             </span>
@@ -587,6 +617,16 @@ export default function App() {
                 />
               </div>
             )}
+            {/* Admin CLI console: engine tooling (PROTOCOL §0.6), not a tier. */}
+            {cliStarted && cliAvailable && (
+              <div className="tab-fill" hidden={tab !== 'cli'} data-testid="cli-panel">
+                <CliConsole
+                  supportsCli={cliAvailable}
+                  roles={cliRoles}
+                  anonymous={cliAnonymous}
+                />
+              </div>
+            )}
           </div>
         </section>
         </main>
@@ -594,11 +634,14 @@ export default function App() {
 
       <footer className="app-footer">
         <span>
-          Read-only HTTP client · contract v{SUPPORTED_PROTOCOL_VERSION} · discovery via{' '}
+          Read-only client path · contract v{SUPPORTED_PROTOCOL_VERSION} · discovery via{' '}
           <code>#Columns</code> <code>#Dimensions</code> <code>#Hierarchies</code>{' '}
           <code>#Members</code> <code>#Edges</code>
         </span>
-        <span>Read-only by design — T4 writeback not adopted.</span>
+        <span>
+          T4 writeback not adopted · the admin Modeling console is experimental engine tooling
+          (PROTOCOL §0.6)
+        </span>
       </footer>
     </div>
   );

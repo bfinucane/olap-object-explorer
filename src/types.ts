@@ -8,9 +8,11 @@
  * engine HEAD `d6b02e0` (2026-10-28).
  *
  * The engine tree and the contract folder belong to other sessions; this client
- * only reads the wire. It is read-only by design: tiers T0–T3 are adopted, T4
- * writeback is not (the engine supports it — `supportsWrite`, PROTOCOL §7/§8 —
- * this product simply does not write).
+ * only reads the wire. The browsing/data path is read-only by design: tiers
+ * T0–T3 are adopted, T4 writeback is not (the engine supports it — `supportsWrite`,
+ * PROTOCOL §7/§8 — this product simply does not write). The optional Modeling tab
+ * uses the separate admin CLI route (`POST /v1/cli`, PROTOCOL §0.6, D28), which is
+ * engine tooling, not a data tier.
  */
 
 /** A cell as it arrives in JSON. Absent measure cells are `null` (PROTOCOL §5.10). */
@@ -32,6 +34,12 @@ export interface Capabilities {
    * read the live response, never the snapshot file.
    */
   authRequired?: boolean;
+  /**
+   * Whether `POST /v1/cli` exists (PROTOCOL §0.6, contract DECISIONS D28). This
+   * is optional and must be feature-detected: an older engine omits it, and the
+   * modelling console is never required for a conformance tier.
+   */
+  supportsCli?: boolean;
   /**
    * Whether `POST /v1/{dataset}/write` and `POST /v1/save` exist (PROTOCOL §7/§8).
    * This client never writes, but the report is typed so the claim stays honest.
@@ -128,6 +136,17 @@ export interface SqlResponse {
   sql: string;
   output: string;
   elapsedMs: number;
+}
+
+/**
+ * `POST /v1/cli` — engine tooling, not a client data path (PROTOCOL §0.6,
+ * DECISIONS D28). `ok: false` is a loud command failure returned with HTTP 200;
+ * transport/auth failures use the ordinary error envelope instead.
+ */
+export interface CliResponse {
+  ok: boolean;
+  output: string;
+  truncated: boolean;
 }
 
 /** `POST /v1/login` — only engines with authentication enabled have this route. */

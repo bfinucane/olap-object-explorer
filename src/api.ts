@@ -19,6 +19,7 @@
 
 import type {
   Capabilities,
+  CliResponse,
   DatasetDescription,
   DatasetsResponse,
   LoginResponse,
@@ -229,6 +230,16 @@ export const engineApi = {
   /** The engine's formatted-TEXT SQL console endpoint. */
   sql(sql: string): Promise<SqlResponse> {
     return postJson<SqlResponse>('/v1/sql', { sql });
+  },
+
+  /**
+   * POST /v1/cli — the admin-only engine CLI bridge (PROTOCOL §0.6, D28).
+   * Engine tooling, not a client data path; callers MUST feature-detect
+   * `capabilities.supportsCli`. The engine validates the single-command policy
+   * and returns command-level failures as HTTP 200 with `ok: false`.
+   */
+  cli(command: string): Promise<CliResponse> {
+    return postJson<CliResponse>('/v1/cli', { command });
   },
 };
 

@@ -809,6 +809,12 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
       return 'shell rendered directly';
     });
 
+    await checkAsync('feature gate: no Modeling tab when the engine omits supportsCli', async () => {
+      const hasTab = await page.evaluate(`document.querySelector('[data-testid="tab-cli"]') !== null`);
+      assert.equal(hasTab, false, 'Modeling tab appeared for an engine without supportsCli');
+      return 'read-only T0–T3 shell unchanged';
+    });
+
     await checkAsync('tree: user cubes and system cubes are separated', async () => {
       // Compare against what the engine currently lists: system cubes grow as the
       // engine adds control cubes, and `-Fresh` can reseed the database.
@@ -1144,6 +1150,69 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
         await new Promise((resolve) => stub.server.close(resolve));
       }
     });
+
+    await checkAsync('CLI console: supportsCli gate, help/error/truncated/save', async () => {
+      const stub = await startCliStub();
+      try {
+        await page.navigate(`${baseUrl}?engine=${encodeURIComponent(stub.baseUrl)}`);
+        await page.waitFor(
+          `document.querySelector('[data-testid="tab-cli"]') !== null`,
+          'Modeling tab',
+        );
+        await page.click('[data-testid="tab-cli"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="cli-input"]') !== null`,
+          'CLI input',
+        );
+        const experimental = await page.text('[data-testid="cli-experimental"]');
+        assert.ok(/experimental/i.test(experimental), `not labelled experimental: ${experimental}`);
+        const warning = await page.text('[data-testid="cli-save-warning"]');
+        assert.ok(/running/i.test(warning), `save warning does not mention the running copy: ${warning}`);
+        assert.ok(/frozen/i.test(warning), `save warning does not mention the frozen release: ${warning}`);
+
+        await setInputValue(page, '[data-testid="cli-input"]', '.help');
+        await page.click('[data-testid="cli-run"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="cli-output"]')?.innerText.includes('Available Commands') === true`,
+          'help output',
+        );
+        assert.ok((await page.text('[data-testid="cli-status"]')).includes('ok'));
+
+        await setInputValue(page, '[data-testid="cli-input"]', '.fail');
+        await page.click('[data-testid="cli-run"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="cli-status"]')?.innerText.includes('command failed') === true`,
+          'command failure status',
+        );
+        const failure = await page.text('[data-testid="cli-output"]');
+        assert.ok(failure.includes('unknown command'), `error text missing: ${failure}`);
+
+        await setInputValue(page, '[data-testid="cli-input"]', '.long');
+        await page.click('[data-testid="cli-run"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="cli-truncated"]') !== null`,
+          'truncated chip',
+        );
+
+        await page.click('[data-testid="cli-save"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="cli-save-confirm"]') !== null`,
+          'save confirmation',
+        );
+        await page.click('[data-testid="cli-save-confirm"] .btn-primary');
+        await page.waitFor(
+          `document.querySelector('[data-testid="cli-output"]')?.innerText.includes('Database saved.') === true`,
+          'save output',
+        );
+        const history = await page.text('[data-testid="cli-history"]');
+        assert.ok(history.includes('.save'), `history missing .save: ${history}`);
+        assert.ok(history.includes('.fail'), `history missing .fail: ${history}`);
+        await page.screenshot('11-modeling-console.png');
+        return 'gate + help/error/truncated/save';
+      } finally {
+        await new Promise((resolve) => stub.server.close(resolve));
+      }
+    });
   } catch (error) {
     fail('UI walkthrough (anonymous)', error);
     try {
@@ -1280,6 +1349,114 @@ async function startVersionStub(reportedVersion) {
     server.listen(VERSION_STUB_PORT, '127.0.0.1', resolve);
   });
   return { server, hits, baseUrl: `http://127.0.0.1:${VERSION_STUB_PORT}` };
+}
+
+/**
+ * A stub engine that advertises `supportsCli` and answers /v1/cli, so the
+ * Modelling console can be exercised without a real CLI-capable engine (the
+ * reference fixture predates the route). It only serves what the shell needs:
+ * capabilities, datasets, the #Dimensions discovery query, and /v1/cli.
+ */
+async function startCliStub() {
+  const hits = [];
+  const server = createServer((req, res) => {
+    hits.push(`${req.method} ${req.url}`);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    const send = (status, body) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+    if (req.method === 'GET' && req.url === '/v1/capabilities') {
+      send(200, {
+        protocolVersion: 1,
+        aggregations: ['SUM'],
+        filterOperators: ['in'],
+        maxRows: 100000,
+        supportsJoin: false,
+        supportsInlineDomain: false,
+        supportsLod: false,
+        countDistinctExact: false,
+        expressionFunctions: [],
+        authRequired: false,
+        supportsCli: true,
+      });
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/v1/datasets') {
+      send(200, { datasets: ['Orders'] });
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/v1/%23Dimensions/query') {
+      send(200, {
+        columns: [],
+        columnMeta: [],
+        dimensionNames: [],
+        measureNames: [],
+        measureLabels: [],
+        rows: [],
+        domain: {},
+        elapsedMs: 0,
+        truncated: false,
+      });
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/v1/cli') {
+      let raw = '';
+      req.setEncoding('utf8');
+      req.on('data', (chunk) => {
+        raw += chunk;
+      });
+      req.on('end', () => {
+        let command = '';
+        try {
+          command = String(JSON.parse(raw).command ?? '');
+        } catch {
+          send(400, { error: 'Malformed JSON', code: 'invalid_argument' });
+          return;
+        }
+        if (command === '.help') {
+          send(200, {
+            ok: true,
+            output: 'Available Commands:\n  .cubes  - List all cubes\n  .save   - Save the database',
+            truncated: false,
+          });
+          return;
+        }
+        if (command === '.fail') {
+          send(200, {
+            ok: false,
+            output: "Error: unknown command '.fail'.",
+            truncated: false,
+          });
+          return;
+        }
+        if (command === '.long') {
+          send(200, { ok: true, output: 'x'.repeat(64), truncated: true });
+          return;
+        }
+        if (command === '.save') {
+          send(200, { ok: true, output: 'Database saved.', truncated: false });
+          return;
+        }
+        send(200, { ok: true, output: `ran ${command}`, truncated: false });
+      });
+      return;
+    }
+    send(404, { error: 'CLI stub only serves capabilities/datasets/#Dimensions/cli', code: 'invalid_argument' });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const { port } = server.address();
+  return { server, hits, baseUrl: `http://127.0.0.1:${port}` };
 }
 
 async function startAuthEngine(binary) {
