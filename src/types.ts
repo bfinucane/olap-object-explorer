@@ -35,6 +35,12 @@ export interface Capabilities {
    */
   authRequired?: boolean;
   /**
+   * Human-friendly name of the database file the engine opened (optional; newer
+   * engines report it). One engine serves one database; its datasets/cubes are
+   * the selectable objects in the tree.
+   */
+  databaseName?: string;
+  /**
    * Whether `POST /v1/cli` exists (PROTOCOL §0.6, contract DECISIONS D28). This
    * is optional and must be feature-detected: an older engine omits it, and the
    * modelling console is never required for a conformance tier.

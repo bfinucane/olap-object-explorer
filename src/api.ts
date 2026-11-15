@@ -84,14 +84,84 @@ export function authToken(): string | null {
 }
 
 /** Empty string means "same origin" (the Vite dev/preview proxy). */
+const ENGINE_OVERRIDE_KEY = 'olap-object-explorer.engine';
+
+function browserStorage(): Storage | null {
+  if (!isBrowser()) return null;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** The URL chosen in the UI (sessionStorage), or null when the proxy is used. */
+export function storedEngineOverride(): string | null {
+  const storage = browserStorage();
+  if (storage === null) return null;
+  try {
+    const raw = storage.getItem(ENGINE_OVERRIDE_KEY);
+    return raw === null || raw === '' ? null : raw;
+  } catch {
+    return null;
+  }
+}
+
 export function engineBase(): string {
   if (isBrowser()) {
     const configured = new URLSearchParams(window.location.search).get('engine');
-    if (configured !== null) return configured.replace(/\/+$/, '');
-    return '';
+    if (configured !== null && configured.trim() !== '') return configured.replace(/\/+$/, '');
+    return storedEngineOverride() ?? '';
   }
   // Node (verification tools): talk to the engine directly, no proxy needed.
   return (nodeEnv('OLAP_ENGINE_URL') ?? 'http://127.0.0.1:8080').replace(/\/+$/, '');
+}
+
+/**
+ * Pick an engine server in the UI. `null` clears the override and returns to the
+ * same-origin Vite proxy (the default `8080` target baked at build time). The
+ * `?engine=` query parameter is removed so the stored choice is not shadowed by
+ * an older link. Direct URLs must be CORS-enabled engines.
+ */
+export function setEngineOverride(url: string | null): void {
+  const storage = browserStorage();
+  const normalized = url === null ? null : url.trim().replace(/\/+$/, '');
+  if (storage !== null) {
+    try {
+      if (normalized === null || normalized === '') storage.removeItem(ENGINE_OVERRIDE_KEY);
+      else storage.setItem(ENGINE_OVERRIDE_KEY, normalized);
+    } catch {
+      /* storage unavailable: the address-bar override still works */
+    }
+  }
+  if (isBrowser()) {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('engine')) {
+      params.delete('engine');
+      const query = params.toString();
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${query === '' ? '' : `?${query}`}${window.location.hash}`,
+      );
+    }
+  }
+}
+
+/** Validate a server URL typed in the UI; returns an error message or null. */
+export function validateEngineUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return 'Enter a full URL, e.g. http://127.0.0.1:8199';
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return 'Only http:// and https:// URLs are supported.';
+  }
+  return null;
 }
 
 /** Human-readable engine location for the header and error messages. */

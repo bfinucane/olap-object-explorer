@@ -288,6 +288,95 @@ code {
   border-radius: 4px;
 }
 
+.server-picker {
+  position: relative;
+  display: inline-flex;
+}
+
+.server-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.server-button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.server-db {
+  color: #a9c2d4;
+  font-size: 10px;
+}
+
+.server-caret {
+  font-size: 9px;
+  opacity: 0.8;
+}
+
+.server-popover {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(470px, 86vw);
+  padding: 14px 16px;
+  background: #fff;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(15, 35, 55, 0.25);
+  font: 12px/1.5 var(--sans);
+}
+
+.server-popover h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.server-popover .hint {
+  margin: 8px 0;
+  font-size: 11.5px;
+}
+
+.server-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0;
+  font: 11px var(--mono);
+  color: var(--text-muted);
+}
+
+.server-field input {
+  padding: 7px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: #fbfcfd;
+  color: var(--text);
+  font: 12px var(--mono);
+}
+
+.server-field input:focus {
+  outline: 2px solid #cfe1f0;
+  border-color: var(--accent);
+}
+
+.server-error {
+  color: var(--error);
+}
+
+.server-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
 .pill {
   font: 700 10.5px var(--sans);
   letter-spacing: 0.05em;
@@ -1512,7 +1601,7 @@ code {
   }
 
   .header-meta,
-  .engine-target {
+  .server-db {
     display: none;
   }
 }

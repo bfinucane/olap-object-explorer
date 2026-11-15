@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   SUPPORTED_PROTOCOL_VERSION,
   engineApi,
-  engineBase,
   engineLabel,
   engineTarget,
   errorCode,
@@ -29,6 +28,7 @@ import { LoginScreen } from './login';
 import type { MemberNode } from './memberTree';
 import { PreviewPane } from './preview';
 import type { Selection } from './selection';
+import { ServerPicker } from './serverPicker';
 import { SqlConsole } from './sql';
 import { Tree, type TreeNodeModel } from './tree';
 import type { Capabilities, ColumnDescription, DatasetDescription } from './types';
@@ -84,6 +84,9 @@ export default function App() {
   const [sqlStarted, setSqlStarted] = useState(false);
   // Same lazy-mount rule for the admin modelling console (and its history).
   const [cliStarted, setCliStarted] = useState(false);
+  // Remount stateful panels when the engine server changes, so a query/CLI
+  // history from the old database cannot leak into the new one.
+  const [engineEpoch, setEngineEpoch] = useState(0);
   const [selection, setSelection] = useState<Selection>({ kind: 'empty' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Remember the last cube the user actually selected, so opening the SQL
@@ -226,6 +229,23 @@ export default function App() {
     setSelection({ kind: 'empty' });
     setSelectedId(null);
     setLastCube(null);
+    void bootstrap();
+  }, [bootstrap]);
+
+  /**
+   * Switch engine server from the header picker. The old bearer token belongs to
+   * the previous engine, so it is dropped; the login screen appears when the new
+   * engine requires auth. Remount panels to clear old cube/CLI context.
+   */
+  const reconnect = useCallback(() => {
+    clearAuth();
+    resetDiscoveryCache();
+    setSession(null);
+    setSelection({ kind: 'empty' });
+    setSelectedId(null);
+    setLastCube(null);
+    setSource({ status: 'loading' });
+    setEngineEpoch((epoch) => epoch + 1);
     void bootstrap();
   }, [bootstrap]);
 
@@ -459,9 +479,6 @@ export default function App() {
 
   const contextLabel = describeSelection(selection);
 
-  // When ?engine= overrides the proxy target, show what is actually being called.
-  const effectiveEngine = engineBase() === '' ? engineTarget() : engineBase();
-
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -498,16 +515,13 @@ export default function App() {
               {session.user}
             </span>
           )}
-          <span
-            className="engine-target"
-            title={
-              engineBase() === ''
-                ? `The Vite proxy forwards /v1 to ${engineTarget()}, so the browser never makes a cross-origin request.`
-                : 'Engine base URL set with ?engine=; requests go straight there and need CORS on the engine.'
+          <ServerPicker
+            defaultTarget={engineTarget()}
+            databaseName={
+              capabilities.status === 'ready' ? capabilities.data.databaseName : undefined
             }
-          >
-            {effectiveEngine}
-          </span>
+            onConnect={reconnect}
+          />
           {session !== null && (
             <button type="button" className="btn btn-header" data-testid="logout" onClick={logout}>
               Sign out
@@ -611,6 +625,7 @@ export default function App() {
             {sqlStarted && (
               <div className="tab-fill" hidden={tab !== 'sql'} data-testid="sql-panel">
                 <SqlConsole
+                  key={`sql-${engineEpoch}`}
                   datasets={datasets}
                   selectedCube={sqlCube}
                   selectedDimension={sqlDimension}
@@ -621,6 +636,7 @@ export default function App() {
             {cliStarted && cliAvailable && (
               <div className="tab-fill" hidden={tab !== 'cli'} data-testid="cli-panel">
                 <CliConsole
+                  key={`cli-${engineEpoch}`}
                   supportsCli={cliAvailable}
                   roles={cliRoles}
                   anonymous={cliAnonymous}

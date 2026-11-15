@@ -1151,6 +1151,62 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
       }
     });
 
+    await checkAsync('server picker: connect to another engine and return to the proxy default', async () => {
+      const stub = await startCliStub();
+      try {
+        await page.navigate(baseUrl);
+        await page.waitFor(
+          `document.querySelector('[data-testid="server-picker"]') !== null`,
+          'server picker',
+        );
+        await page.click('[data-testid="server-picker"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="server-input"]') !== null`,
+          'server dialog',
+        );
+
+        await setInputValue(page, '[data-testid="server-input"]', 'not a url');
+        await page.click('[data-testid="server-connect"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="server-error"]') !== null`,
+          'URL validation',
+        );
+
+        await setInputValue(page, '[data-testid="server-input"]', stub.baseUrl);
+        await page.click('[data-testid="server-connect"]');
+        await page.waitFor(
+          `document.querySelector('[data-node-id="cube:Orders"]') !== null`,
+          'stub engine tree',
+        );
+        const pickerText = await page.text('[data-testid="server-picker"]');
+        assert.ok(
+          pickerText.includes(stub.baseUrl),
+          `picker does not show the chosen server: ${pickerText}`,
+        );
+
+        await page.click('[data-testid="server-picker"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="server-default"]') !== null`,
+          'default action',
+        );
+        await page.click('[data-testid="server-default"]');
+        await page.waitFor(
+          `document.querySelector('[data-node-id="cube:Sales"]') !== null`,
+          'proxy default tree',
+        );
+        return 'direct server + proxy default';
+      } finally {
+        try {
+          await page.evaluate(
+            `sessionStorage.removeItem('olap-object-explorer.engine')`,
+          );
+        } catch {
+          /* best effort */
+        }
+        await new Promise((resolve) => stub.server.close(resolve));
+      }
+    });
+
     await checkAsync('CLI console: supportsCli gate, help/error/truncated/save', async () => {
       const stub = await startCliStub();
       try {

@@ -52,6 +52,27 @@ The engine's CORS is off by default (PROTOCOL §0.4), so the Vite dev/preview se
 
 > Port: defaults to **5182**; `set PORT=<n>` before `start.cmd` overrides it.
 
+### Choosing the engine server
+
+Use the **server control in the header** (top right, showing the current engine URL and the
+database name when the engine reports it):
+
+- **Connect** to a full URL such as `http://127.0.0.1:8199`. A direct URL is fetched by the
+  browser, so the engine must be started with CORS enabled (`--cors`); an auth-enabled engine
+  shows the login form after connecting.
+- **Use proxy default** returns to the same-origin Vite proxy (the `OLAP_ENGINE_URL` target at
+  build/preview time, default `http://127.0.0.1:8080`).
+- The choice is per-tab (`sessionStorage`); `?engine=<url>` still works for links and is removed
+  when the picker is used.
+
+An engine serves **one database**; the database name is shown next to the URL, and its datasets
+(the `Orders` cube, system cubes) are the rows in the Explorer tree. To switch databases,
+connect to the engine that hosts the other one.
+
+```text
+http://127.0.0.1:5182/?engine=http://127.0.0.1:8199     # direct, needs engine --cors
+```
+
 If the engine enforces authentication — the engine source does, by default — the explorer
 shows a sign-in form. Create a user once in the engine project (the security file is
 `security.json` beside the engine's database):
@@ -80,7 +101,7 @@ pin lives in this README and in one code comment (`src/types.ts`).
 | T4 writeback | **not adopted by design** — the engine supports `POST /v1/{dataset}/write` and `POST /v1/save` (`capabilities.supportsWrite: true`); this product's data path does not write |
 | Modeling console | **not a tier** — optional admin CLI console, feature-gated on `capabilities.supportsCli`, experimental engine tooling (PROTOCOL §0.6, D28). An engine without the capability shows no tab, and T0–T3 behavior is unchanged |
 | Verified against | engine `76355a8` for the CLI route (pre-release; not in the live 8080 pair yet), model **v2.2 on catalogue format v3**, contract v1 — 2026-11-15; base client verified against engine release `36afe88`/`12bfef1` (2026-11-10) |
-| Evidence | `tsc --noEmit` exit 0; suite **61/61 checks, exit 0** (see [Verification](#verification)); live scratch-engine CLI smoke: `.help`, `.cubes`, `.import_measures`, `.run`, `.save`, `.exit` no-op, server stays up |
+| Evidence | `tsc --noEmit` exit 0; suite **62/62 checks, exit 0** (see [Verification](#verification)); live scratch-engine CLI smoke: `.help`, `.cubes`, `.import_measures`, `.run`, `.save`, `.exit` no-op, server stays up |
 
 The client validates `capabilities.protocolVersion` before any data request and shows a
 blocking **"Unsupported contract version"** state on a mismatch (PROTOCOL §0.3/§12): a v2
@@ -232,7 +253,7 @@ Environment overrides (all optional; workspace defaults shown):
 When no engine binary/reference database is available, phases 3–5 report a skip and phases
 1–2 still run, so a plain clone gets build + unit coverage.
 
-Five phases, **61 checks, all green** (2026-11-15; suite run against the archived v1 demo
+Five phases, **62 checks, all green** (2026-11-15; suite run against the archived v1 demo
 fixture with engine `33ae673`, live-model SQL smoke against model v2.2 / format v3, and a live
 scratch-engine CLI smoke at engine `76355a8`). The fixture keeps the numeric fixtures stable;
 the SQL-console behaviour is model-independent and was also smoke-tested against the live
@@ -258,7 +279,8 @@ the SQL-console behaviour is model-independent and was also smoke-tested against
    `/v1/capabilities` is hit), and — against a stub advertising `supportsCli` — open the
    Modeling tab, run `.help`, display a command failure, show the truncation badge, and walk
    the two-step save confirmation. The real-engine phase asserts the tab is **absent** when
-   `supportsCli` is missing.
+   `supportsCli` is missing, and the **server picker** connects to a stub engine URL (including
+   validation of a malformed URL) and returns to the proxy default.
 5. Authentication against a real engine with auth enabled on a **copy** of `database.bin`:
    public capabilities with `authRequired: true`, 401s without a token, wrong-password 401,
    login token/roles, authenticated discovery, clearing the token 401s; in the browser the
