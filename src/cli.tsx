@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import type { FormEvent } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import type { FormEvent, KeyboardEvent } from 'react';
 import { engineApi, errorCode, errorText } from './api';
 import type { CliResponse } from './types';
 
@@ -78,6 +78,12 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
   const [formError, setFormError] = useState<string | null>(null);
   const [saveConfirm, setSaveConfirm] = useState(false);
   const [nextId, setNextId] = useState(1);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // Shell-style recall: null = editing a new line; otherwise an index into
+  // `entries` (newest first), with the in-progress line kept in `draft`.
+  const [browseIndex, setBrowseIndex] = useState<number | null>(null);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   const knownAdmin = roles === null ? null : rolesIncludeAdmin(roles);
   const canRun = knownAdmin !== false;
@@ -107,6 +113,8 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
     setFormError(null);
     setSaveConfirm(false);
     setRunning(true);
+    setBrowseIndex(null);
+    setDraft('');
     const id = nextId;
     setNextId(id + 1);
     try {
@@ -154,6 +162,50 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
     void execute('.save');
   };
 
+  const recallOlder = () => {
+    if (entries.length === 0) return;
+    const next = browseIndex === null ? 0 : Math.min(entries.length - 1, browseIndex + 1);
+    if (browseIndex === null) setDraft(command);
+    setBrowseIndex(next);
+    setCommand(entries[next].command);
+  };
+
+  const recallNewer = () => {
+    if (browseIndex === null) return;
+    const next = browseIndex - 1;
+    if (next < 0) {
+      setBrowseIndex(null);
+      setCommand(draft);
+    } else {
+      setBrowseIndex(next);
+      setCommand(entries[next].command);
+    }
+  };
+
+  const chooseHistory = (entry: CliEntry) => {
+    setCommand(entry.command);
+    setActiveId(entry.id);
+    setBrowseIndex(null);
+    setHistoryOpen(false);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowUp') {
+      if (entries.length > 0) {
+        event.preventDefault();
+        recallOlder();
+      }
+    } else if (event.key === 'ArrowDown') {
+      if (browseIndex !== null) {
+        event.preventDefault();
+        recallNewer();
+      }
+    } else if (event.key === 'Escape') {
+      setHistoryOpen(false);
+    }
+  };
+
   return (
     <div className="cli" data-testid="cli-console">
       <div className="cli-head">
@@ -191,6 +243,7 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
         <>
           <form className="cli-form" onSubmit={submit}>
             <input
+              ref={inputRef}
               type="text"
               className="cli-input"
               data-testid="cli-input"
@@ -199,7 +252,11 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
               spellCheck={false}
               autoComplete="off"
               value={command}
-              onChange={(event) => setCommand(event.target.value)}
+              onChange={(event) => {
+                setCommand(event.target.value);
+                if (browseIndex !== null) setBrowseIndex(null);
+              }}
+              onKeyDown={onInputKeyDown}
             />
             <button
               type="submit"
@@ -209,6 +266,40 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
             >
               Run
             </button>
+            <div className="cli-history-button-wrap">
+              <button
+                type="button"
+                className="btn"
+                data-testid="cli-history-button"
+                aria-haspopup="menu"
+                aria-expanded={historyOpen}
+                title="Recent commands (↑/↓ in the input recalls them)"
+                disabled={entries.length === 0}
+                onClick={() => setHistoryOpen((open) => !open)}
+              >
+                History ▾
+              </button>
+              {historyOpen && entries.length > 0 && (
+                <div className="cli-history-menu" role="menu" data-testid="cli-history-menu">
+                  {entries.map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      role="menuitem"
+                      data-testid="cli-history-item"
+                      className={`cli-history-item${entry.ok ? '' : ' is-error'}`}
+                      title={entry.command}
+                      onClick={() => chooseHistory(entry)}
+                    >
+                      <span className="cli-history-command">{entry.command}</span>
+                      <span className="cli-history-meta">
+                        {entry.kind === 'http' ? 'http' : entry.ok ? 'ok' : 'failed'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               type="button"
               className="btn"
@@ -218,6 +309,8 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
                 setEntries([]);
                 setActiveId(null);
                 setFormError(null);
+                setBrowseIndex(null);
+                setHistoryOpen(false);
               }}
             >
               Clear history
@@ -298,7 +391,7 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
 
           <div className="cli-history-wrap">
             <h3>
-              History <span className="count">{entries.length}</span>
+              Session log <span className="count">{entries.length}</span>
             </h3>
             {entries.length === 0 ? (
               <p className="muted">No commands yet in this session.</p>

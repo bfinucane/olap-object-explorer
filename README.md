@@ -160,7 +160,9 @@ weights of `0.5` are preserved and unit-tested. Cycles and self-edges cannot han
   default (contract D22; engine `0e4214d`).
 - **Modeling** (only when `capabilities.supportsCli` is true) — admin CLI console for engine
   `POST /v1/cli` (PROTOCOL §0.6, D28). One command per request (≤8192 bytes, no CR/LF), output
-  pane with truncation badge, command history, and error display. The tab is **experimental
+  pane with truncation badge, command history (a **History ▾** dropdown plus shell-style
+  **↑/↓** recall in the command input; memory only, cleared by a reload or server switch), and
+  error display. The tab is **experimental
   engine tooling, not a conformance tier**; it is gated on the capability and, for a known
   non-admin login, on the `admin` role (the server still enforces 403). The full CLI is
   available to admin: inspection, modelling, `.import*`, `.run`, SQL DDL/DML and an explicit
@@ -280,7 +282,8 @@ the SQL-console behaviour is model-independent and was also smoke-tested against
    Modeling tab, run `.help`, display a command failure, show the truncation badge, and walk
    the two-step save confirmation. The real-engine phase asserts the tab is **absent** when
    `supportsCli` is missing, and the **server picker** connects to a stub engine URL (including
-   validation of a malformed URL) and returns to the proxy default.
+   validation of a malformed URL) and returns to the proxy default; the CLI check also exercises
+   the History ▾ dropdown and ↑ recall.
 5. Authentication against a real engine with auth enabled on a **copy** of `database.bin`:
    public capabilities with `authRequired: true`, 401s without a token, wrong-password 401,
    login token/roles, authenticated discovery, clearing the token 401s; in the browser the

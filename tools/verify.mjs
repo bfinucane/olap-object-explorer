@@ -1263,8 +1263,31 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
         const history = await page.text('[data-testid="cli-history"]');
         assert.ok(history.includes('.save'), `history missing .save: ${history}`);
         assert.ok(history.includes('.fail'), `history missing .fail: ${history}`);
+
+        await page.click('[data-testid="cli-history-button"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="cli-history-menu"]') !== null`,
+          'history dropdown',
+        );
+        const historyItems = await page.count('[data-testid="cli-history-item"]');
+        assert.ok(historyItems >= 3, `history dropdown has only ${historyItems} items`);
+        await page.click('[data-testid="cli-history-item"]');
+        const recalled = await page.evaluate(
+          `document.querySelector('[data-testid="cli-input"]').value`,
+        );
+        assert.equal(recalled, '.save', `history item did not load: ${recalled}`);
+
+        await setInputValue(page, '[data-testid="cli-input"]', '');
+        await page.evaluate(
+          `document.querySelector('[data-testid="cli-input"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))`,
+        );
+        const arrowRecalled = await page.evaluate(
+          `document.querySelector('[data-testid="cli-input"]').value`,
+        );
+        assert.equal(arrowRecalled, '.save', `ArrowUp did not recall: ${arrowRecalled}`);
+
         await page.screenshot('11-modeling-console.png');
-        return 'gate + help/error/truncated/save';
+        return 'gate + help/error/truncated/save + history dropdown/ArrowUp';
       } finally {
         await new Promise((resolve) => stub.server.close(resolve));
       }

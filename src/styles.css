@@ -1533,6 +1533,35 @@ code {
   margin-top: 10px;
 }
 
+.cli-history-button-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.cli-history-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  right: 0;
+  width: min(520px, 72vw);
+  max-height: 260px;
+  overflow: auto;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 8px 22px rgba(23, 43, 61, 0.16);
+}
+
+.cli-history-menu .cli-history-item {
+  border-bottom: 1px solid #eef1f4;
+  border-radius: 4px;
+}
+
+.cli-history-menu .cli-history-item:last-child {
+  border-bottom: 0;
+}
+
 .cli-history-wrap h3 {
   margin: 0 0 6px;
   font-size: 13px;
