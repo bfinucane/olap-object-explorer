@@ -1,6 +1,12 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
-import { engineApi, errorCode, errorText } from './api';
+import { engineApi, engineBase, errorCode, errorText } from './api';
+import {
+  addCommand,
+  cliHistoryKey,
+  loadHistory,
+  saveHistory,
+} from './cliHistory';
 import type { CliResponse } from './types';
 
 interface CliConsoleProps {
@@ -17,6 +23,8 @@ interface CliConsoleProps {
   roles: string[] | null;
   /** True when the engine reports authRequired: false (development mode). */
   anonymous: boolean;
+  /** Signed-in user, or null for anonymous / token-only sessions. */
+  user: string | null;
 }
 
 interface CliEntry {
@@ -98,6 +106,14 @@ function nowLabel(): string {
   return new Date().toLocaleTimeString();
 }
 
+function browserStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Admin modelling console for the engine's CLI bridge (`POST /v1/cli`).
  *
@@ -115,9 +131,13 @@ function nowLabel(): string {
  * `.save` writes the **running** database copy, not the frozen release pair;
  * the button therefore says so explicitly and requires a second click.
  */
-export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
+export function CliConsole({ supportsCli, roles, anonymous, user }: CliConsoleProps) {
   const [command, setCommand] = useState('');
   const [entries, setEntries] = useState<CliEntry[]>([]);
+  // Persistent shell-style history: commands only, server+user scoped.
+  const storage = browserStorage();
+  const historyStoreKey = cliHistoryKey(engineBase(), user);
+  const [history, setHistory] = useState<string[]>(() => loadHistory(storage, historyStoreKey));
   const [activeId, setActiveId] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -137,6 +157,10 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
     () => entries.find((entry) => entry.id === activeId) ?? entries[0] ?? null,
     [entries, activeId],
   );
+
+  useEffect(() => {
+    saveHistory(storage, historyStoreKey, history);
+  }, [storage, historyStoreKey, history]);
 
   if (!supportsCli) {
     return (
@@ -159,6 +183,7 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
     setFormError(null);
     setSaveConfirm(false);
     setTemplateOpen(false);
+    setHistory((previous) => addCommand(previous, raw));
     setRunning(true);
     setBrowseIndex(null);
     setDraft('');
@@ -210,11 +235,11 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
   };
 
   const recallOlder = () => {
-    if (entries.length === 0) return;
-    const next = browseIndex === null ? 0 : Math.min(entries.length - 1, browseIndex + 1);
+    if (history.length === 0) return;
+    const next = browseIndex === null ? 0 : Math.min(history.length - 1, browseIndex + 1);
     if (browseIndex === null) setDraft(command);
     setBrowseIndex(next);
-    setCommand(entries[next].command);
+    setCommand(history[next]);
   };
 
   const recallNewer = () => {
@@ -225,13 +250,12 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
       setCommand(draft);
     } else {
       setBrowseIndex(next);
-      setCommand(entries[next].command);
+      setCommand(history[next]);
     }
   };
 
-  const chooseHistory = (entry: CliEntry) => {
-    setCommand(entry.command);
-    setActiveId(entry.id);
+  const chooseHistory = (recalled: string) => {
+    setCommand(recalled);
     setBrowseIndex(null);
     setHistoryOpen(false);
     setTemplateOpen(false);
@@ -259,8 +283,7 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
         event.preventDefault();
         recallNewer();
       }
-    } else if (event.key === 'Escape') {
-      setHistoryOpen(false);
+    } else if (event.key === 'Escape') {      setHistoryOpen(false);
       setTemplateOpen(false);
     }
   };
@@ -374,8 +397,8 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
                 data-testid="cli-history-button"
                 aria-haspopup="menu"
                 aria-expanded={historyOpen}
-                title="Recent commands (↑/↓ in the input recalls them)"
-                disabled={entries.length === 0}
+                title="Recent commands, remembered per server and user (↑/↓ recalls them)"
+                disabled={history.length === 0}
                 onClick={() => {
                   setHistoryOpen((open) => !open);
                   setTemplateOpen(false);
@@ -383,22 +406,20 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
               >
                 History ▾
               </button>
-              {historyOpen && entries.length > 0 && (
+              {historyOpen && history.length > 0 && (
                 <div className="cli-history-menu" role="menu" data-testid="cli-history-menu">
-                  {entries.map((entry) => (
+                  {history.map((recalled, index) => (
                     <button
-                      key={entry.id}
+                      key={`${index}-${recalled}`}
                       type="button"
                       role="menuitem"
                       data-testid="cli-history-item"
-                      className={`cli-history-item${entry.ok ? '' : ' is-error'}`}
-                      title={entry.command}
-                      onClick={() => chooseHistory(entry)}
+                      className="cli-history-item"
+                      title={recalled}
+                      onClick={() => chooseHistory(recalled)}
                     >
-                      <span className="cli-history-command">{entry.command}</span>
-                      <span className="cli-history-meta">
-                        {entry.kind === 'http' ? 'http' : entry.ok ? 'ok' : 'failed'}
-                      </span>
+                      <span className="cli-history-command">{recalled}</span>
+                      <span className="cli-history-meta">recall</span>
                     </button>
                   ))}
                 </div>
@@ -408,9 +429,10 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
               type="button"
               className="btn"
               data-testid="cli-clear"
-              disabled={running || entries.length === 0}
+              disabled={running || (entries.length === 0 && history.length === 0)}
               onClick={() => {
                 setEntries([]);
+                setHistory([]);
                 setActiveId(null);
                 setFormError(null);
                 setBrowseIndex(null);

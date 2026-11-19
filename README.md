@@ -101,7 +101,7 @@ pin lives in this README and in one code comment (`src/types.ts`).
 | T4 writeback | **not adopted by design** — the engine supports `POST /v1/{dataset}/write` and `POST /v1/save` (`capabilities.supportsWrite: true`); this product's data path does not write |
 | Modeling console | **not a tier** — optional admin CLI console, feature-gated on `capabilities.supportsCli`, experimental engine tooling (PROTOCOL §0.6, D28). An engine without the capability shows no tab, and T0–T3 behavior is unchanged |
 | Verified against | engine `76355a8` for the CLI route (pre-release; not in the live 8080 pair yet), model **v2.2 on catalogue format v3**, contract v1 — 2026-11-15; base client verified against engine release `36afe88`/`12bfef1` (2026-11-10) |
-| Evidence | `tsc --noEmit` exit 0; suite **63/63 checks, exit 0** (see [Verification](#verification)); live scratch-engine CLI smoke: `.help`, `.cubes`, `.import_measures`, `.run`, `.save`, `.exit` no-op, server stays up |
+| Evidence | `tsc --noEmit` exit 0; suite **64/64 checks, exit 0** (see [Verification](#verification)); live scratch-engine CLI smoke: `.help`, `.cubes`, `.import_measures`, `.run`, `.save`, `.exit` no-op, server stays up |
 
 The client validates `capabilities.protocolVersion` before any data request and shows a
 blocking **"Unsupported contract version"** state on a mismatch (PROTOCOL §0.3/§12): a v2
@@ -164,8 +164,9 @@ weights of `0.5` are preserved and unit-tested. Cycles and self-edges cannot han
   default (contract D22; engine `0e4214d`).
 - **Modeling** (only when `capabilities.supportsCli` is true) — admin CLI console for engine
   `POST /v1/cli` (PROTOCOL §0.6, D28). One command per request (≤8192 bytes, no CR/LF), output
-  pane with truncation badge, command history (a **History ▾** dropdown plus shell-style
-  **↑/↓** recall in the command input; memory only, cleared by a reload or server switch), and
+  pane with truncation badge, persistent command history (a **History ▾** dropdown plus
+  shell-style **↑/↓** recall in the command input; commands only, capped at 100, kept in
+  `localStorage` per engine server + signed-in user, cleared by **Clear history**), and
   error display. A **Templates ▾** menu inserts CREATE skeletons into the command line (plain
   cube, measure-dimension cube, attribute table, dimension, hierarchy) for the operator to
   rename and run. The tab is **experimental
@@ -261,7 +262,7 @@ Environment overrides (all optional; workspace defaults shown):
 When no engine binary/reference database is available, phases 3–5 report a skip and phases
 1–2 still run, so a plain clone gets build + unit coverage.
 
-Five phases, **63 checks, all green** (2026-11-16; suite run against the archived v1 demo
+Five phases, **64 checks, all green** (2026-11-19; suite run against the archived v1 demo
 fixture with engine `33ae673`, live-model SQL smoke against model v2.2 / format v3, and a live
 scratch-engine CLI smoke at engine `76355a8`). The fixture keeps the numeric fixtures stable;
 the SQL-console behaviour is model-independent and was also smoke-tested against the live
@@ -290,9 +291,10 @@ the SQL-console behaviour is model-independent and was also smoke-tested against
    `supportsCli` is missing, and the **server picker** connects to a stub engine URL (including
    validation of a malformed URL) and returns to the proxy default; the CLI check also exercises
    the History ▾ dropdown and ↑ recall, plus the **Templates ▾** CREATE menu inserting the
-   table skeleton. The SQL console check asserts the parsed **HTML table**
-   (headers, rows, row/column meta) and the raw-text toggle; a pure unit check covers the
-   table parser, including its raw fallback for empty/ambiguous output.
+   table skeleton, then reloads the app and asserts the command history survived. A pure unit
+   check covers the 100-command cap, dedupe and storage round-trip; another unit check covers
+   the table parser. The SQL console check asserts the parsed **HTML table** (headers, rows,
+   row/column meta) and the raw-text toggle, including its fallback for empty/ambiguous output.
 5. Authentication against a real engine with auth enabled on a **copy** of `database.bin`:
    public capabilities with `authRequired: true`, 401s without a token, wrong-password 401,
    login token/roles, authenticated discovery, clearing the token 401s; in the browser the
@@ -415,6 +417,11 @@ own the fixes. Contract section numbers refer to `contract/PROTOCOL.md` (§11 = 
 - No multi-server **bookmark list**: the server chooser takes a direct URL or the proxy default;
   `?engine=` also works.
 - No "remember me": the token is per-tab `sessionStorage`, deliberately not persisted to disk.
+- **CLI command history is persisted** in `localStorage` (commands only — no output), keyed by
+  engine server + signed-in user, capped at 100, and removed by **Clear history**. This is a
+  browser-profile store, so two OS users sharing one browser profile can see each other's
+  commands; an anonymous session shares the `anonymous` key for that server. It is not a
+  server-side audit log and should not be treated as one.
 - The SQL console parses the engine's text table for display; it does not implement SQL itself
   and still has no `GROUP BY` support because the engine's tooling path ignores it (§11.6).
 

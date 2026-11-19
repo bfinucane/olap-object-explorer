@@ -35,6 +35,14 @@ export {
 export type { SessionInfo, UnauthorizedReason } from './auth';
 export type { DimensionInfo, MemberTree } from './discovery';
 export * from './memberTree';
+export {
+  CLI_HISTORY_LIMIT,
+  addCommand,
+  cliHistoryKey,
+  loadHistory,
+  normalizeHistory,
+  saveHistory,
+} from './cliHistory';
 export { parseSqlTable } from './sqlTable';
 export type { ParsedSqlTable } from './sqlTable';
 export type {

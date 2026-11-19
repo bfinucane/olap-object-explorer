@@ -415,6 +415,10 @@ async function phaseUnit() {
   const memberTree = await bundle('src/memberTree.ts', 'memberTree.mjs');
   const { buildMemberForest, countNodes, flattenNames, compareMemberNames, sortMemberNames } = memberTree;
   const { parseSqlTable } = await bundle('src/sqlTable.ts', 'sqlTable.mjs');
+  const { addCommand, loadHistory, saveHistory, normalizeHistory, CLI_HISTORY_LIMIT } = await bundle(
+    'src/cliHistory.ts',
+    'cliHistory.mjs',
+  );
 
   check('empty database: no members and no edges -> empty forest', () => {
     assert.deepEqual(buildMemberForest([], []), []);
@@ -565,6 +569,34 @@ async function phaseUnit() {
       'ambiguous cell count must fall back to raw text',
     );
     return '2 tables parsed; empty/malformed fall back to raw';
+  });
+
+  check('CLI history: capped at 100, newest first, dedupe, persisted per key', () => {
+    let history = [];
+    for (let index = 0; index < CLI_HISTORY_LIMIT + 25; index += 1) {
+      history = addCommand(history, `.command ${index}`);
+    }
+    assert.equal(history.length, CLI_HISTORY_LIMIT);
+    assert.equal(history[0], `.command ${CLI_HISTORY_LIMIT + 24}`);
+    assert.equal(addCommand(history, history[0]).length, CLI_HISTORY_LIMIT, 'consecutive duplicate kept');
+    assert.deepEqual(addCommand([], 'multi\nline'), [], 'multi-line command rejected');
+
+    const fakeStorage = (() => {
+      const data = new Map();
+      return {
+        getItem: (key) => (data.has(key) ? data.get(key) : null),
+        setItem: (key, value) => data.set(key, String(value)),
+        removeItem: (key) => data.delete(key),
+      };
+    })();
+    saveHistory(fakeStorage, 'k', history);
+    const restored = loadHistory(fakeStorage, 'k');
+    assert.equal(restored.length, CLI_HISTORY_LIMIT);
+    assert.equal(restored[0], history[0]);
+    saveHistory(fakeStorage, 'k', []);
+    assert.deepEqual(loadHistory(fakeStorage, 'k'), []);
+    assert.deepEqual(normalizeHistory(['ok', 3, 'bad\nvalue', '']), ['ok']);
+    return `${CLI_HISTORY_LIMIT} max, dedupe, round-trip`;
   });
 }
 
@@ -1346,8 +1378,29 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
           'CREATE TABLE NewCube (Region STRING, Segment STRING, Category STRING)',
         );
 
+        // A reload is a new app session; the command list must survive (100-item
+        // localStorage history, server+user scoped).
+        await page.navigate(`${baseUrl}?engine=${encodeURIComponent(stub.baseUrl)}`);
+        await page.waitFor(
+          `document.querySelector('[data-testid="tab-cli"]') !== null`,
+          'Modeling tab after reload',
+        );
+        await page.click('[data-testid="tab-cli"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="cli-history-button"]') !== null`,
+          'history button after reload',
+        );
+        await page.click('[data-testid="cli-history-button"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="cli-history-menu"]') !== null`,
+          'persisted history menu',
+        );
+        const persisted = await page.text('[data-testid="cli-history-menu"]');
+        assert.ok(persisted.includes('.help'), `history lost after reload: ${persisted}`);
+        assert.ok(persisted.includes('.save'), `history lost .save after reload: ${persisted}`);
+
         await page.screenshot('11-modeling-console.png');
-        return 'gate + help/error/truncated/save + history + CREATE templates';
+        return 'gate + help/error/truncated/save + history + CREATE templates + reload persistence';
       } finally {
         await new Promise((resolve) => stub.server.close(resolve));
       }

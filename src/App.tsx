@@ -640,6 +640,7 @@ export default function App() {
                   supportsCli={cliAvailable}
                   roles={cliRoles}
                   anonymous={cliAnonymous}
+                  user={session === null ? null : session.user}
                 />
               </div>
             )}
