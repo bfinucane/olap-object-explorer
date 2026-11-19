@@ -1635,6 +1635,21 @@ code {
   display: inline-block;
 }
 
+.cli-template-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.cli-template-menu {
+  width: min(620px, 82vw);
+}
+
+.cli-template-heading {
+  margin: 5px 7px 6px;
+  color: var(--text-faint);
+  font: 10.5px var(--mono);
+}
+
 .cli-history-menu {
   position: absolute;
   z-index: 30;

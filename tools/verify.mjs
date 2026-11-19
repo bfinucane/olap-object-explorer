@@ -1328,8 +1328,26 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
         );
         assert.equal(arrowRecalled, '.save', `ArrowUp did not recall: ${arrowRecalled}`);
 
+        await page.click('[data-testid="cli-template-button"]');
+        await page.waitFor(
+          `document.querySelector('[data-testid="cli-template-menu"]') !== null`,
+          'CREATE template menu',
+        );
+        const templateCount = await page.count(
+          '[data-testid="cli-template-menu"] button[data-testid^="cli-template-"]',
+        );
+        assert.ok(templateCount >= 5, `expected CREATE templates, saw ${templateCount}`);
+        await page.click('[data-testid="cli-template-create-table"]');
+        const inserted = await page.evaluate(
+          `document.querySelector('[data-testid="cli-input"]').value`,
+        );
+        assert.equal(
+          inserted,
+          'CREATE TABLE NewCube (Region STRING, Segment STRING, Category STRING)',
+        );
+
         await page.screenshot('11-modeling-console.png');
-        return 'gate + help/error/truncated/save + history dropdown/ArrowUp';
+        return 'gate + help/error/truncated/save + history + CREATE templates';
       } finally {
         await new Promise((resolve) => stub.server.close(resolve));
       }

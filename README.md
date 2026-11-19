@@ -158,13 +158,17 @@ weights of `0.5` are preserved and unit-tested. Cycles and self-edges cannot han
   column row in Details) into the statement to insert it at the caret. Contract-wise this is
   engine tooling, not a data path (PROTOCOL §0.5); the pane states the remaining gaps (§11.6
   `GROUP BY`/`HAVING` parsed-but-unread, §11.7 `COUNT` over text, §11.8 no-measure duplication).
+  The web SQL console is **read-only**: CREATE/INSERT/DROP are refused there by the engine —
+  those belong in the admin Modeling console's CLI (D28).
   Omitted dimensions **aggregate across all members** — there is no implicit first-member
   default (contract D22; engine `0e4214d`).
 - **Modeling** (only when `capabilities.supportsCli` is true) — admin CLI console for engine
   `POST /v1/cli` (PROTOCOL §0.6, D28). One command per request (≤8192 bytes, no CR/LF), output
   pane with truncation badge, command history (a **History ▾** dropdown plus shell-style
   **↑/↓** recall in the command input; memory only, cleared by a reload or server switch), and
-  error display. The tab is **experimental
+  error display. A **Templates ▾** menu inserts CREATE skeletons into the command line (plain
+  cube, measure-dimension cube, attribute table, dimension, hierarchy) for the operator to
+  rename and run. The tab is **experimental
   engine tooling, not a conformance tier**; it is gated on the capability and, for a known
   non-admin login, on the `admin` role (the server still enforces 403). The full CLI is
   available to admin: inspection, modelling, `.import*`, `.run`, SQL DDL/DML and an explicit
@@ -285,7 +289,8 @@ the SQL-console behaviour is model-independent and was also smoke-tested against
    the two-step save confirmation. The real-engine phase asserts the tab is **absent** when
    `supportsCli` is missing, and the **server picker** connects to a stub engine URL (including
    validation of a malformed URL) and returns to the proxy default; the CLI check also exercises
-   the History ▾ dropdown and ↑ recall. The SQL console check asserts the parsed **HTML table**
+   the History ▾ dropdown and ↑ recall, plus the **Templates ▾** CREATE menu inserting the
+   table skeleton. The SQL console check asserts the parsed **HTML table**
    (headers, rows, row/column meta) and the raw-text toggle; a pure unit check covers the
    table parser, including its raw fallback for empty/ambiguous output.
 5. Authentication against a real engine with auth enabled on a **copy** of `database.bin`:

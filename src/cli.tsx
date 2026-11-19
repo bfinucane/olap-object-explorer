@@ -33,6 +33,51 @@ interface CliEntry {
 const MAX_COMMAND_BYTES = 8192;
 const HISTORY_LIMIT = 30;
 
+interface CliTemplate {
+  id: string;
+  label: string;
+  detail: string;
+  sql: string;
+}
+
+/**
+ * CREATE skeletons for the admin CLI. The web SQL console (`/v1/sql`) is
+ * read-only, so modelling DDL belongs here; the template only fills the command
+ * input — the operator renames the example objects and presses Run.
+ */
+const CREATE_TEMPLATES: CliTemplate[] = [
+  {
+    id: 'create-table',
+    label: 'CREATE TABLE — plain cube',
+    detail: 'STRING dimensions; the trailing insert value is the cell',
+    sql: 'CREATE TABLE NewCube (Region STRING, Segment STRING, Category STRING)',
+  },
+  {
+    id: 'create-table-measure',
+    label: 'CREATE TABLE — measure cube',
+    detail: 'adds a MEASURE dimension (members like Sales, Profit)',
+    sql: 'CREATE TABLE NewCubeMeasure (Region STRING, Segment STRING, Measure MEASURE)',
+  },
+  {
+    id: 'create-attribute',
+    label: 'CREATE ATTRIBUTE TABLE',
+    detail: 'key columns + attribute name/value pairs',
+    sql: 'CREATE ATTRIBUTE TABLE NewAttributes (Region STRING, Attribute MEASURE)',
+  },
+  {
+    id: 'create-dimension',
+    label: 'CREATE DIMENSION',
+    detail: 'empty dimension; add members with .import_* or INSERT',
+    sql: 'CREATE DIMENSION NewDimension',
+  },
+  {
+    id: 'create-hierarchy',
+    label: 'CREATE HIERARCHY',
+    detail: 'run after its dimension exists',
+    sql: 'CREATE HIERARCHY NewHierarchy IN NewDimension',
+  },
+];
+
 function byteLength(text: string): number {
   if (typeof TextEncoder === 'undefined') return text.length;
   return new TextEncoder().encode(text).length;
@@ -79,6 +124,7 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
   const [saveConfirm, setSaveConfirm] = useState(false);
   const [nextId, setNextId] = useState(1);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [templateOpen, setTemplateOpen] = useState(false);
   // Shell-style recall: null = editing a new line; otherwise an index into
   // `entries` (newest first), with the in-progress line kept in `draft`.
   const [browseIndex, setBrowseIndex] = useState<number | null>(null);
@@ -112,6 +158,7 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
     }
     setFormError(null);
     setSaveConfirm(false);
+    setTemplateOpen(false);
     setRunning(true);
     setBrowseIndex(null);
     setDraft('');
@@ -187,6 +234,17 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
     setActiveId(entry.id);
     setBrowseIndex(null);
     setHistoryOpen(false);
+    setTemplateOpen(false);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  const insertTemplate = (template: CliTemplate) => {
+    setCommand(template.sql);
+    setBrowseIndex(null);
+    setDraft('');
+    setFormError(null);
+    setTemplateOpen(false);
+    setHistoryOpen(false);
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
@@ -203,6 +261,7 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
       }
     } else if (event.key === 'Escape') {
       setHistoryOpen(false);
+      setTemplateOpen(false);
     }
   };
 
@@ -266,6 +325,48 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
             >
               Run
             </button>
+            <div className="cli-template-wrap">
+              <button
+                type="button"
+                className="btn"
+                data-testid="cli-template-button"
+                aria-haspopup="menu"
+                aria-expanded={templateOpen}
+                title="Insert a CREATE skeleton into the command line"
+                disabled={running}
+                onClick={() => {
+                  setTemplateOpen((open) => !open);
+                  setHistoryOpen(false);
+                }}
+              >
+                Templates ▾
+              </button>
+              {templateOpen && (
+                <div
+                  className="cli-history-menu cli-template-menu"
+                  role="menu"
+                  data-testid="cli-template-menu"
+                >
+                  <p className="cli-template-heading">
+                    CREATE templates — inserted into the command line; rename, then Run
+                  </p>
+                  {CREATE_TEMPLATES.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      role="menuitem"
+                      className="cli-history-item"
+                      data-testid={`cli-template-${template.id}`}
+                      title={template.sql}
+                      onClick={() => insertTemplate(template)}
+                    >
+                      <span className="cli-history-command">{template.label}</span>
+                      <span className="cli-history-meta">{template.detail}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="cli-history-button-wrap">
               <button
                 type="button"
@@ -275,7 +376,10 @@ export function CliConsole({ supportsCli, roles, anonymous }: CliConsoleProps) {
                 aria-expanded={historyOpen}
                 title="Recent commands (↑/↓ in the input recalls them)"
                 disabled={entries.length === 0}
-                onClick={() => setHistoryOpen((open) => !open)}
+                onClick={() => {
+                  setHistoryOpen((open) => !open);
+                  setTemplateOpen(false);
+                }}
               >
                 History ▾
               </button>
