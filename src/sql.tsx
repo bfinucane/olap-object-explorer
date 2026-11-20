@@ -280,19 +280,18 @@ export function SqlConsole({ datasets, selectedCube, selectedDimension }: SqlCon
 
       <p className="hint">
         Only <code>SELECT</code> is accepted. A dimension you omit aggregates across{' '}
-        <strong>all of its members</strong> — there is no implicit default member (contract D22);
-        an explicit model default, if one is set, would restrict it. System cubes always read all
-        rows. Ctrl+Enter runs.
+        <strong>all of its members</strong> — there is no implicit default; an explicit model
+        default, if one is set, would restrict them. System cubes always read all rows. Ctrl+Enter
+        runs.
       </p>
 
       <p className="hint" data-testid="sql-gaps">
-        <strong>Known engine gaps on this tooling path</strong> (contract §11.6/§11.7/§11.8):{' '}
-        <code>GROUP BY</code>/<code>HAVING</code>/<code>DISTINCT</code> are parsed but ignored —
-        project the dimensions explicitly; <code>COUNT</code> over a text column returns the last
-        text, not a cell count — use <code>COUNTD</code> for text; and a projection with no measure
-        repeats each group once per measure member — keep <code>value</code> or a measure in the
-        list. This surface is not a client data path (contract §0.5); the tree and details pane
-        use the query API.
+        <strong>Known limitations of this SQL console:</strong>{' '}
+        <code>GROUP BY</code>/<code>HAVING</code>/<code>DISTINCT</code> are ignored — project the
+        dimensions explicitly; <code>COUNT</code> over a text column returns the last text, not a
+        cell count — use <code>COUNTD</code> for text; and a projection with no measure repeats
+        each group once per measure member — keep <code>value</code> or a measure in the list. For
+        normal exploration use the tree and the Details/Preview panes.
       </p>
 
       {pendingCube !== null && (

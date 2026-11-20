@@ -1302,8 +1302,12 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
           'version-blocked panel',
         );
         const panel = await page.text('[data-testid="version-blocked"]');
-        assert.ok(panel.includes('protocolVersion 2'), `panel does not name the reported version: ${panel}`);
-        assert.ok(/contract v1/.test(panel), `panel does not name the pinned contract version: ${panel}`);
+        assert.ok(
+          panel.includes('Unsupported engine version'),
+          `panel does not name the problem: ${panel}`,
+        );
+        assert.ok(/engine API version 1/.test(panel), `panel does not name the supported version: ${panel}`);
+        assert.ok(panel.includes('2'), `panel does not name the reported version: ${panel}`);
 
         // The guard must run before any data call: only capabilities may be hit.
         const dataHits = stub.hits.filter((hit) => !hit.endsWith('/v1/capabilities'));

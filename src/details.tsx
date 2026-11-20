@@ -119,8 +119,8 @@ function CubeDetails({ dataset, onSelectColumn, onShowPreview }: CubeDetailsProp
 
       {dataset.isSystem && (
         <p className="hint">
-          An engine-maintained system cube (<code>#</code> prefix, PROTOCOL §10.3). Read-only; it
-          lists every row unless filtered.
+          An engine-maintained system cube (<code>#</code> prefix). Read-only; it lists every row
+          unless filtered.
         </p>
       )}
 
@@ -329,8 +329,8 @@ function DomainValues({ dataset, field }: { dataset: string; field: string }) {
       )}
 
       <p className="hint">
-        Full member list in engine display order, fetched with <code>domainFor</code> (PROTOCOL
-        §5.6). Dimension access may hide members; an empty list means the caller may see none.
+        Full member list in engine display order, fetched with <code>domainFor</code>. Dimension
+        access may hide members; an empty list means the caller may see none.
       </p>
     </div>
   );

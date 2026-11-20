@@ -498,7 +498,6 @@ export default function App() {
           </span>
           {capabilities.status === 'ready' && (
             <span className="header-meta">
-              engine protocol v{capabilities.data.protocolVersion} · client contract v{SUPPORTED_PROTOCOL_VERSION} ·
               max {formatCount(capabilities.data.maxRows)} rows
             </span>
           )}          {capabilities.status === 'ready' && capabilities.data.authRequired === false && (
@@ -651,14 +650,10 @@ export default function App() {
 
       <footer className="app-footer">
         <span>
-          Read-only client path · contract v{SUPPORTED_PROTOCOL_VERSION} · discovery via{' '}
-          <code>#Columns</code> <code>#Dimensions</code> <code>#Hierarchies</code>{' '}
-          <code>#Members</code> <code>#Edges</code>
+          Read-only data browser · discovery via <code>#Columns</code> <code>#Dimensions</code>{' '}
+          <code>#Hierarchies</code> <code>#Members</code> <code>#Edges</code>
         </span>
-        <span>
-          T4 writeback not adopted · the admin Modeling console is experimental engine tooling
-          (PROTOCOL §0.6)
-        </span>
+        <span>The explorer never writes · Modeling is experimental engine tooling</span>
       </footer>
     </div>
   );
@@ -681,13 +676,14 @@ function UnsupportedVersion({
   return (
     <div className="main-message" data-testid="version-blocked">
       <div className="version-card">
-        <h2>Unsupported contract version</h2>
+        <h2>Unsupported engine version</h2>
         <p>
-          This explorer pins <strong>contract v{supported}</strong> (protocolVersion {supported}). The
-          engine reports <strong>protocolVersion {reported}</strong>, so no data was requested.
+          This explorer supports engine API version <strong>{supported}</strong>. The engine
+          reports <strong>{reported}</strong>, so no data was requested.
         </p>
         <p className="muted">
-          Update the client, or point <code>?engine=</code> at a v{supported} engine, then retry.
+          Update the explorer, or point <code>?engine=</code> at an engine with API version{' '}
+          {supported}, then retry.
         </p>
         <button type="button" className="btn btn-primary" onClick={onRetry}>
           Retry

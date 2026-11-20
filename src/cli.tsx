@@ -296,16 +296,16 @@ export function CliConsole({ supportsCli, roles, anonymous, user }: CliConsolePr
           experimental engine tooling
         </span>
         <span className="muted">
-          <code>POST /v1/cli</code> · admin only · one command per request · not a conformance tier
-          (PROTOCOL §0.6, D28)
+          <code>POST /v1/cli</code> · admin only · one command per request · experimental modelling
+          tool
         </span>
       </div>
 
       <p className="hint">
-        This is the engine's own CLI over HTTP, not a client data path: commands can model, import
-        and <code>.save</code>. <code>.exit</code>/<code>.quit</code> are no-ops — the server stays
-        up. Imports read <strong>server-side paths</strong>; this app has no upload route, so place
-        the file where the engine can read it and pass that path to <code>.import…</code>.
+        This is the engine's own CLI over HTTP: commands can model, import and <code>.save</code>.{' '}
+        <code>.exit</code>/<code>.quit</code> are no-ops — the server stays up. Imports read{' '}
+        <strong>server-side paths</strong>; this app has no upload route, so place the file where
+        the engine can read it and pass that path to <code>.import…</code>.
       </p>
 
       {anonymous && (
