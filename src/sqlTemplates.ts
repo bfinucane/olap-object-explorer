@@ -10,12 +10,14 @@ import type { ColumnDescription, DatasetDescription } from './types';
  * Semantics that shape the templates:
  *  - A dimension omitted from `groupBy` and filters contributes ALL of its base
  *    members to the aggregation (explicit-default semantics, contract D22).
- *    So an aggregate template without a dimension is a whole-model total today,
- *    not an arbitrary slice.
  *  - `value` is the measure-dimension expansion: on a cube with a measure
  *    dimension it yields one column per measure (PROTOCOL §5.2/§5.3).
  *  - A projection with NO measures repeats each group once per measure member
  *    (§11.8), so every template includes `value` or a measure.
+ *  - **Attribute tables** (`isAttributeTable`) are pivot sources: their measure
+ *    dimension holds ATTRIBUTE NAMES and its cells hold the values. Projecting
+ *    that column together with `value` is the refused combination (PROTOCOL
+ *    §11.4), so it is excluded from every template (handoff 024).
  *  - SQL has no `SELECT *` and no column aliases here; templates stay plain.
  */
 
@@ -28,13 +30,10 @@ export interface SqlTemplate {
 }
 
 /**
- * Dimensions a template can project: real dimension columns, not the measure axis.
- *
- * The engine reports the trailing `value` cell of a **system cube** as
+ * Dimensions a template can project: real dimension columns, not the `value`
+ * token. The engine reports a system cube's trailing `value` cell as
  * `suggestedKind: "dimension"` (e.g. `#Dimensions` → `#Dimension`, `#Property`,
- * `value`). `value` is the SQL measure token, so it is excluded here and added
- * exactly once by the templates below; otherwise a system cube yields
- * `SELECT …, value, value`.
+ * `value`), so `value` is excluded here and added exactly once below.
  */
 export function dimensionColumns(dataset: DatasetDescription): ColumnDescription[] {
   return dataset.columns.filter(
@@ -42,47 +41,75 @@ export function dimensionColumns(dataset: DatasetDescription): ColumnDescription
   );
 }
 
-export function isDimensionColumn(dataset: DatasetDescription, name: string): boolean {
-  return dimensionColumns(dataset).some((column) => column.name === name);
+/**
+ * Grouping/key dimensions. The measure dimension is never a key: on a normal
+ * cube it is the axis whose members are measures, and on an attribute table it
+ * is the attribute-name column. `describe` hints an attribute table's text
+ * measure dimension as `suggestedKind: "dimension"` (PROTOCOL §3.2), so kind
+ * alone cannot exclude it.
+ */
+export function keyDimensionColumns(dataset: DatasetDescription): ColumnDescription[] {
+  return dimensionColumns(dataset).filter((column) => column.name !== dataset.measureDimension);
+}
+
+export function isKeyDimension(dataset: DatasetDescription, name: string): boolean {
+  return keyDimensionColumns(dataset).some((column) => column.name === name);
 }
 
 /**
- * The default statement: every dimension plus every measure (`value`), as raw
- * rows. Naming every dimension means no implicit aggregation surprise and no
- * §11.8 duplication; it is the honest "show me the shape" query.
+ * The default statement. For a normal cube: every dimension + `value`. For an
+ * attribute table: key dimensions + `value`, which pivots attributes into
+ * columns — there is no raw EAV form in SQL (handoff 024).
  */
 export function buildRowSample(dataset: DatasetDescription): string {
-  const dimensions = dimensionColumns(dataset).map((column) => column.name);
+  const dimensions = (dataset.isAttributeTable ? keyDimensionColumns(dataset) : dimensionColumns(dataset)).map(
+    (column) => column.name,
+  );
   const projection = dimensions.length > 0 ? [...dimensions, 'value'].join(', ') : 'value';
   return `SELECT ${projection} FROM ${dataset.dataset} LIMIT 50`;
 }
 
-/** One dimension with every measure aggregated over the remaining dimensions. */
+/** One key dimension with every measure aggregated over the remaining dimensions. */
 export function buildByDimension(dataset: DatasetDescription, dimension: string | null): string | null {
-  if (dimension === null || !isDimensionColumn(dataset, dimension)) return null;
+  if (dimension === null || !isKeyDimension(dataset, dimension)) return null;
   return `SELECT ${dimension}, value FROM ${dataset.dataset} LIMIT 100`;
 }
 
-/** Whole-cube totals: one row, one column per measure. */
-export function buildTotals(dataset: DatasetDescription): string {
+/**
+ * Whole-cube totals: never for an attribute table. `SELECT value` there pivots
+ * every attribute column (and aggregating text is misleading); a COUNTD-style
+ * template would be a separate deliberate choice, not this one.
+ */
+export function buildTotals(dataset: DatasetDescription): string | null {
+  if (dataset.isAttributeTable) return null;
   return `SELECT value FROM ${dataset.dataset} LIMIT 10`;
 }
 
 /**
  * The template menu for a cube. `selectedDimension` comes from the tree selection
- * and only enables the "By …" entry when it names a dimension of this cube.
+ * and only enables the "By …" entry when it names a **key** dimension of this
+ * cube (never the attribute/measure dimension).
  */
 export function buildTemplates(
   dataset: DatasetDescription,
   selectedDimension: string | null,
 ): { templates: SqlTemplate[]; byDimensionDisabled: boolean } {
   const byDimension = buildByDimension(dataset, selectedDimension);
+  const totals = buildTotals(dataset);
   const templates: SqlTemplate[] = [
-    { id: 'rows', label: 'Row sample — every dimension + every measure', sql: buildRowSample(dataset) },
+    {
+      id: 'rows',
+      label: dataset.isAttributeTable
+        ? 'Attribute sample — key dimensions + pivoted attributes'
+        : 'Row sample — every dimension + every measure',
+      sql: buildRowSample(dataset),
+    },
   ];
   if (byDimension !== null && selectedDimension !== null) {
     templates.push({ id: 'by-dimension', label: `By ${selectedDimension} — every measure`, sql: byDimension });
   }
-  templates.push({ id: 'totals', label: 'Totals — every measure, whole cube', sql: buildTotals(dataset) });
+  if (totals !== null) {
+    templates.push({ id: 'totals', label: 'Totals — every measure, whole cube', sql: totals });
+  }
   return { templates, byDimensionDisabled: byDimension === null };
 }

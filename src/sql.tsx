@@ -180,12 +180,9 @@ export function SqlConsole({ datasets, selectedCube, selectedDimension }: SqlCon
     description.status === 'ready' ? buildTemplates(description.description, selectedDimension) : null;
   const canRun = cube !== '' && description.status === 'ready';
   const parsed = result === null ? null : parseSqlTable(result.output);
-  const dimensionSelectionUsable =
-    description.status === 'ready' &&
-    selectedDimension !== null &&
-    description.description.columns.some(
-      (column) => column.suggestedKind === 'dimension' && column.name === selectedDimension,
-    );
+  const rowsTemplate = templates?.templates.find((template) => template.id === 'rows') ?? null;
+  const totalsTemplate = templates?.templates.find((template) => template.id === 'totals') ?? null;
+  const byDimensionDisabled = templates === null || templates.byDimensionDisabled;
 
   return (
     <div className="sql">
@@ -234,19 +231,21 @@ export function SqlConsole({ datasets, selectedCube, selectedDimension }: SqlCon
                 type="button"
                 role="menuitem"
                 data-testid="sql-template-rows"
-                onClick={() => applyTemplate(templates.templates.find((t) => t.id === 'rows')!)}
+                onClick={() => {
+                  if (rowsTemplate !== null) applyTemplate(rowsTemplate);
+                }}
               >
-                Row sample <span className="muted">every dimension + value</span>
+                {rowsTemplate?.label ?? 'Row sample'}
               </button>
               <button
                 type="button"
                 role="menuitem"
                 data-testid="sql-template-by-dimension"
-                disabled={!dimensionSelectionUsable}
+                disabled={byDimensionDisabled}
                 title={
-                  dimensionSelectionUsable
-                    ? `Group by ${selectedDimension}`
-                    : 'Select a dimension column in the tree first'
+                  byDimensionDisabled
+                    ? 'Select a key dimension in the tree first (the attribute/measure column cannot be grouped with value)'
+                    : `Group by ${selectedDimension}`
                 }
                 onClick={() => {
                   const template = templates.templates.find((t) => t.id === 'by-dimension');
@@ -256,14 +255,16 @@ export function SqlConsole({ datasets, selectedCube, selectedDimension }: SqlCon
                 By {selectedDimension ?? 'selected dimension'}{' '}
                 <span className="muted">every measure</span>
               </button>
-              <button
-                type="button"
-                role="menuitem"
-                data-testid="sql-template-totals"
-                onClick={() => applyTemplate(templates.templates.find((t) => t.id === 'totals')!)}
-              >
-                Totals <span className="muted">every measure, whole cube</span>
-              </button>
+              {totalsTemplate !== null && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="sql-template-totals"
+                  onClick={() => applyTemplate(totalsTemplate)}
+                >
+                  Totals <span className="muted">every measure, whole cube</span>
+                </button>
+              )}
             </div>
           )}
         </div>

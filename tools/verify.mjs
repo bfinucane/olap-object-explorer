@@ -419,6 +419,10 @@ async function phaseUnit() {
     'src/cliHistory.ts',
     'cliHistory.mjs',
   );
+  const { buildRowSample, buildByDimension, buildTotals, buildTemplates } = await bundle(
+    'src/sqlTemplates.ts',
+    'sqlTemplates.mjs',
+  );
 
   check('empty database: no members and no edges -> empty forest', () => {
     assert.deepEqual(buildMemberForest([], []), []);
@@ -597,6 +601,49 @@ async function phaseUnit() {
     assert.deepEqual(loadHistory(fakeStorage, 'k'), []);
     assert.deepEqual(normalizeHistory(['ok', 3, 'bad\nvalue', '']), ['ok']);
     return `${CLI_HISTORY_LIMIT} max, dedupe, round-trip`;
+  });
+
+  check('SQL templates: attribute tables use key dimensions + value, never the measure column', () => {
+    const attribute = {
+      dataset: 'D_Product',
+      isAttributeTable: true,
+      measureDimension: 'attribute',
+      columns: [
+        { name: 'sku', suggestedKind: 'dimension' },
+        { name: 'attribute', suggestedKind: 'dimension' },
+      ],
+    };
+    assert.equal(buildRowSample(attribute), 'SELECT sku, value FROM D_Product LIMIT 50');
+    assert.ok(!buildRowSample(attribute).includes('attribute,'));
+    assert.equal(buildByDimension(attribute, 'sku'), 'SELECT sku, value FROM D_Product LIMIT 100');
+    assert.equal(buildByDimension(attribute, 'attribute'), null);
+    assert.equal(buildTotals(attribute), null);
+    const attributeMenu = buildTemplates(attribute, 'attribute');
+    assert.equal(attributeMenu.byDimensionDisabled, true);
+    assert.deepEqual(
+      attributeMenu.templates.map((template) => template.id),
+      ['rows'],
+      'attribute table must offer only the pivoted sample',
+    );
+
+    const normal = {
+      dataset: 'Sales',
+      isAttributeTable: false,
+      measureDimension: 'Sales',
+      columns: [
+        { name: 'Region', suggestedKind: 'dimension' },
+        { name: 'Sales', suggestedKind: 'measure' },
+      ],
+    };
+    assert.equal(buildRowSample(normal), 'SELECT Region, value FROM Sales LIMIT 50');
+    assert.equal(buildTotals(normal), 'SELECT value FROM Sales LIMIT 10');
+    const normalMenu = buildTemplates(normal, 'Region');
+    assert.deepEqual(
+      normalMenu.templates.map((template) => template.id),
+      ['rows', 'by-dimension', 'totals'],
+    );
+    assert.equal(normalMenu.byDimensionDisabled, false);
+    return 'attribute keys-only; normal cube unchanged';
   });
 }
 
@@ -1149,6 +1196,53 @@ async function phaseAnonymousUi(engineUp, baseUrl) {
       assert.ok(!/value\s*,\s*value/i.test(statement), `duplicate value column: ${statement}`);
       assert.ok(statement.includes('#Dimension'), `unexpected statement: ${statement}`);
       return statement;
+    });
+
+    await checkAsync('sql console: attribute-table templates exclude the attribute measure column', async () => {
+      await page.click('[data-node-id="cube:RegionAttr"]');
+      await page.waitFor(
+        `document.querySelector('[data-node-id="column:RegionAttr:Attribute"]') !== null`,
+        'RegionAttr columns',
+      );
+      // Selecting the measure/attribute column must not enable a "By attribute"
+      // template: that would combine the measure dimension with value (§11.4).
+      await page.click('[data-node-id="column:RegionAttr:Attribute"]');
+      await page.click('[data-testid="tab-sql"]');
+      await page.waitFor(
+        `document.querySelector('[data-testid="sql-reset"]')?.disabled === false`,
+        'attribute description loaded',
+      );
+      await page.click('[data-testid="sql-reset"]');
+      await page.waitFor(
+        `document.querySelector('[data-testid="sql-input"]')?.value.includes('FROM RegionAttr') === true`,
+        'attribute sample statement',
+      );
+      const statement = await page.evaluate(
+        `document.querySelector('[data-testid="sql-input"]').value`,
+      );
+      assert.equal(statement, 'SELECT Region, value FROM RegionAttr LIMIT 50');
+      assert.ok(!statement.includes('Attribute'), `attribute column leaked: ${statement}`);
+
+      await page.click('[data-testid="sql-template-menu"]');
+      await page.waitFor(
+        `document.querySelector('[data-testid="sql-template-list"]') !== null`,
+        'attribute template menu',
+      );
+      assert.equal(
+        await page.evaluate(`document.querySelector('[data-testid="sql-template-totals"]') === null`),
+        true,
+        'Totals must not be offered for an attribute table',
+      );
+      assert.equal(
+        await page.evaluate(
+          `document.querySelector('[data-testid="sql-template-by-dimension"]')?.disabled === true`,
+        ),
+        true,
+        'By attribute must stay disabled',
+      );
+      await page.screenshot('12-attribute-templates.png');
+      await page.click('[data-testid="sql-template-menu"]');
+      return 'SELECT Region, value FROM RegionAttr LIMIT 50; no by-attribute/totals';
     });
 
     await checkAsync('sql console: query renders as an HTML table with a raw toggle', async () => {

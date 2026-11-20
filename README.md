@@ -101,7 +101,7 @@ pin lives in this README and in one code comment (`src/types.ts`).
 | T4 writeback | **not adopted by design** — the engine supports `POST /v1/{dataset}/write` and `POST /v1/save` (`capabilities.supportsWrite: true`); this product's data path does not write |
 | Modeling console | **not a tier** — optional admin CLI console, feature-gated on `capabilities.supportsCli`, experimental engine tooling (PROTOCOL §0.6, D28). An engine without the capability shows no tab, and T0–T3 behavior is unchanged |
 | Verified against | engine `76355a8` for the CLI route (pre-release; not in the live 8080 pair yet), model **v2.2 on catalogue format v3**, contract v1 — 2026-11-15; base client verified against engine release `36afe88`/`12bfef1` (2026-11-10) |
-| Evidence | `tsc --noEmit` exit 0; suite **64/64 checks, exit 0** (see [Verification](#verification)); live scratch-engine CLI smoke: `.help`, `.cubes`, `.import_measures`, `.run`, `.save`, `.exit` no-op, server stays up |
+| Evidence | `tsc --noEmit` exit 0; suite **66/66 checks, exit 0** (see [Verification](#verification)); live scratch-engine CLI smoke: `.help`, `.cubes`, `.import_measures`, `.run`, `.save`, `.exit` no-op, server stays up |
 
 The client validates `capabilities.protocolVersion` before any data request and shows a
 blocking **"Unsupported contract version"** state on a mismatch (PROTOCOL §0.3/§12): a v2
@@ -154,8 +154,10 @@ weights of `0.5` are preserved and unit-tested. Cycles and self-edges cannot han
   cube selected while a dimension/member is active) and generates its starter statement from
   that cube's `describe`, so it never offers a dataset that no longer exists. A **Templates**
   menu offers a row sample (every dimension + every measure, no implicit aggregation),
-  *By &lt;selected dimension&gt;*, and whole-cube totals. **Drag a name** from the tree (or a
-  column row in Details) into the statement to insert it at the caret. Contract-wise this is
+  *By &lt;selected dimension&gt;*, and whole-cube totals. **Attribute tables** (handoff 024) get
+  **key dimensions + `value`** — a pivoted sample — never their attribute/measure column
+  projected with `value`; *By attribute* stays disabled and Totals is omitted. **Drag a name**
+  from the tree (or a column row in Details) into the statement to insert it at the caret. Contract-wise this is
   engine tooling, not a data path (PROTOCOL §0.5); the pane states the remaining gaps (§11.6
   `GROUP BY`/`HAVING` parsed-but-unread, §11.7 `COUNT` over text, §11.8 no-measure duplication).
   The web SQL console is **read-only**: CREATE/INSERT/DROP are refused there by the engine —
@@ -262,7 +264,7 @@ Environment overrides (all optional; workspace defaults shown):
 When no engine binary/reference database is available, phases 3–5 report a skip and phases
 1–2 still run, so a plain clone gets build + unit coverage.
 
-Five phases, **64 checks, all green** (2026-11-19; suite run against the archived v1 demo
+Five phases, **66 checks, all green** (2026-11-20; suite run against the archived v1 demo
 fixture with engine `33ae673`, live-model SQL smoke against model v2.2 / format v3, and a live
 scratch-engine CLI smoke at engine `76355a8`). The fixture keeps the numeric fixtures stable;
 the SQL-console behaviour is model-independent and was also smoke-tested against the live
@@ -303,7 +305,7 @@ the SQL-console behaviour is model-independent and was also smoke-tested against
    restart mid-session produces the "session expired" re-login.
 
 Screenshots: `01`–`05` anonymous walkthrough, `06`–`08` auth phase, `09-domain-values.png`,
-`10-unsupported-version.png`, `11-modeling-console.png`.
+`10-unsupported-version.png`, `11-modeling-console.png`, `12-attribute-templates.png`.
 
 ### Acceptance criteria (engine handoff + contract adoption)
 
@@ -318,6 +320,7 @@ Screenshots: `01`–`05` anonymous walkthrough, `06`–`08` auth phase, `09-doma
 | Contract pin + `protocolVersion` validation | pinned-v1 unit check + v2 stub UI guard |
 | SQL console follows the selected cube | starter-statement check + template/`By …`/drag checks |
 | SQL text table rendered as a table | parser unit check + UI headers/rows/meta/raw-toggle check |
+| Attribute-table templates | unit check (key + `value`, no measure column) + UI check (`RegionAttr`) |
 | `domainFor` exercised (T1 clause) | data checks + Domain pane + unknown-field error |
 | T2 auth under D1 | token is memory/`sessionStorage`; auth phase above |
 | Read-only data path (T4 not adopted) | only GET + `query`/`sql` POSTs by default; the opt-in CLI console is engine tooling, not T4 |
